@@ -2,6 +2,7 @@ import base64
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+import pytest
 from sqlalchemy.ext.asyncio import create_async_engine
 from test_fish_voice import wav_sample
 from test_speech_execution import runtime
@@ -250,3 +251,57 @@ async def test_cleaned_audio_is_not_sent_but_newer_artifact_remains_available(tm
             == expected
         )
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("same_audio", [False, True], ids=["distinct-capacity", "reuse-capacity"])
+async def test_shared_audio_capacity_admits_only_one_concurrent_voice(
+    database_url, tmp_path, same_audio
+):
+    import asyncio
+
+    from xiaolv.application.voice_dispatch import VoiceDispatch
+    from xiaolv.storage.audio_artifacts import LocalAudioArtifacts
+
+    engine = create_async_engine(database_url, hide_parameters=True)
+    calls = []
+
+    class RPC:
+        async def call(self, action, params):
+            calls.append((action, params))
+            return {"status": "ok", "retcode": 0, "data": {"message_id": 1}}
+
+    class Provider:
+        async def synthesize(self, request):
+            return SpeechResult(
+                wav_sample(2400 if same_audio or request.call_id.endswith("a") else 4800)
+            )
+
+    try:
+        await ConversationControl(engine).register(["chat-1"])
+        epoch = await PostgresDeliveryLedger(engine).start_turn("chat-1")
+        policy = SpeechPolicy(
+            "speech", "synthetic", "model", "price", "v1", Decimal(1), Decimal("0.1")
+        )
+
+        async def run(id):
+            artifacts = LocalAudioArtifacts(tmp_path, max_total_bytes=4844 if same_audio else 10000)
+            rpc, routes = RPC(), {"chat-1": QQTarget("group", 123)}
+            delivery = DeliveryService(
+                OneBotSender(rpc, routes),
+                ledger=PostgresDeliveryLedger(engine),
+                prepare=OneBotPreparation(rpc, routes, artifacts=artifacts),
+            )
+            executor = SpeechExecution(
+                PostgresSpeechLedger(engine, policy), Provider(), VoiceDispatch(artifacts, delivery)
+            )
+            return await runtime(executor).run(
+                ConversationCandidate(
+                    "chat-1", id, "你好", datetime.now(UTC) + timedelta(seconds=30), epoch
+                )
+            )
+
+        expected = ["confirmed", "confirmed"] if same_audio else ["confirmed", "voice_unknown"]
+        assert sorted(await asyncio.gather(run("a"), run("b"))) == expected
+        assert len(calls) == (2 if same_audio else 1)
+    finally:
+        await engine.dispose()
