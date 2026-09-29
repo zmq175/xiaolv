@@ -44,6 +44,8 @@
 
 | [039 持久会话控制](039-conversation-control/spec.md) | Verified | 管理HTTP/浏览器开关、持久停用、旧回合及候选失效、跨进程时序与失败恢复 |
 
-| [040 语音回复闭环](040-voice-reply/spec.md) | In progress | SDK探针、语音意图及持久调用/金额/并发保护已验证；Fish、音频产物与原生发送待完成 |
+| [040 语音回复闭环](040-voice-reply/spec.md) | In progress | Fish官方SDK、音频产物、原生发送、管理核账及崩溃审计已通过合成服务验证；真实计费/QQ播放待验收 |
+
+| [041 入站媒体与按需理解](041-inbound-media/spec.md) | In progress | 有序媒体清单、未理解/不支持状态及token预算；安全获取、视觉与ASR待完成 |
 
 Verified仅表示该规格明示范围通过验证，不代表完整首版或真实QQ上线验收。每个规格包含spec.md、plan.md、evidence.md。开发流程见CONTRIBUTING.md。

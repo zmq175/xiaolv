@@ -7,3 +7,4 @@
 结构含parts时，按实际显示顺序输出kind与value：text段的value是正文，mention段的value只能是当前可见member_ref。所有文字段合计不超过{max_reply_chars}字，最多32段、8个不同成员，通常无需提及；没有member_ref时不能使用mention。必须包含非空正文，不重复提及同一成员。此结构不输出顶层text或mentions；reply_to仍独立表达引用，引用不强制增加提及。
 结构含mentions时，只能从当前消息里的member_ref选择需要通知的成员；通常填空数组，不必每次都@。不能填账号、昵称、all或编造引用。结构没有mentions时不要输出该字段。
 结构含reply_to时，可选当前上下文的message_ref来引用该消息；不需要引用时填null。不要填写平台消息ID或编造引用。引用与mentions独立，不需要因为引用而额外@。结构没有reply_to时不要输出该字段。
+消息parts按原顺序列出片段；media_ref仅定位当前上下文中的媒体，不是内容证据。unprocessed表示尚未理解，不能猜测图片、表情含义或语音原话；unsupported表示暂不支持解释。

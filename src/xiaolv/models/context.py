@@ -62,6 +62,31 @@ class ContextAssembler:
                 }
                 if mentions:
                     row["member_ref"] = f"member_{i + 1}"
+                if any(
+                    part.kind not in {"text", "mention", "mention_all", "reply"}
+                    for part in event.parts
+                ):
+                    parts: list[dict[str, Any]] = []
+                    for index, part in enumerate(event.parts):
+                        if part.kind == "text":
+                            parts.append({"kind": "text", "text": part.text or ""})
+                            continue
+                        if part.kind in {"mention", "mention_all", "reply"}:
+                            parts.append({"kind": part.kind})
+                            continue
+                        kind = part.kind
+                        if kind in {"face", "mface", "sticker"}:
+                            kind = "sticker"
+                        elif kind not in {"image", "audio"}:
+                            kind = "unsupported"
+                        parts.append(
+                            {
+                                "kind": kind,
+                                "media_ref": f"media_{i + 1}_{index + 1}",
+                                "status": "unsupported" if kind == "unsupported" else "unprocessed",
+                            }
+                        )
+                    row["parts"] = parts
                 rows.append(row)
             return json.dumps(
                 {"target_text": candidate.text, "target_truncated": False, "messages": rows},

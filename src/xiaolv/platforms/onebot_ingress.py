@@ -68,6 +68,8 @@ def _part(segment: _Segment) -> MessagePart:
         raise IngressError("invalid media reference")
     if url is not None and not isinstance(url, str):
         raise IngressError("invalid media URL")
+    if kind == "mface" or (kind == "image" and data.get("emoji_id")):
+        kind = "sticker"
     return MessagePart(
         "audio" if kind == "record" else kind,
         reference=str(reference) if reference is not None else None,

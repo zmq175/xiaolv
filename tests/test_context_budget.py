@@ -170,3 +170,38 @@ async def test_special_token_text_is_plain_text_and_budget_log_excludes_content(
     formatted = LineFormatter().format(records[0])
     assert "PRIVATE-SENTINEL" not in formatted
     assert literal not in caplog.text
+
+
+async def test_required_media_manifest_over_budget_never_calls_model_or_sends():
+    from dataclasses import replace
+
+    from xiaolv.domain.chat_event import MessagePart
+
+    calls = []
+
+    class Generator:
+        async def generate(self, **request):
+            calls.append(request)
+            return '{"action":"silence"}'
+
+    media_message = replace(
+        event(1, ""),
+        parts=tuple(MessagePart("image", reference="private") for _ in range(250)),
+    )
+    candidate = ConversationCandidate(
+        "chat-1",
+        "media-turn",
+        "",
+        NOW + timedelta(seconds=45),
+        1,
+        ConversationContext(1, (media_message,)),
+    )
+    platform = Platform()
+    runtime = TextRuntime(
+        ChatCompletionsModel(Generator()),
+        DeliveryService(platform, lambda: NOW, lambda _: 1),
+        lambda: NOW,
+    )
+    assert await runtime.run(candidate) == "context_overflow"
+    assert calls == []
+    assert platform.sent == []

@@ -1158,3 +1158,88 @@ async def test_online_audio_cleanup_runs_periodically_and_stops_with_service(
         stop.set()
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_online_media_parts_reach_model_without_raw_media_locations(database_url, services):
+    incoming = message(content="看看这个")
+    incoming["message"] = [
+        {"type": "text", "data": {"text": "看看这个"}},
+        {
+            "type": "image",
+            "data": {
+                "file": "PRIVATE_MEDIA_FILE",
+                "url": "https://media.invalid/?key=PRIVATE_MEDIA_KEY",
+            },
+        },
+        {
+            "type": "record",
+            "data": {"file": "PRIVATE_AUDIO_FILE", "url": "https://media.invalid/voice"},
+        },
+        {"type": "face", "data": {"id": "14"}},
+    ]
+    services.frames = [incoming]
+    services.action = "silence"
+    stop = asyncio.Event()
+    task = asyncio.create_task(run_live(settings(database_url, services), stop))
+    try:
+        await asyncio.wait_for(services.model_started.wait(), 5)
+        stop.set()
+        summary = await asyncio.wait_for(task, 6)
+        assert summary.outcomes == {"silence": 1}
+        context = services.model_requests[0]["messages"][1]["content"]
+        row = json.loads(context)["messages"][-1]
+        assert row["parts"] == [
+            {"kind": "text", "text": "看看这个"},
+            {"kind": "image", "media_ref": "media_1_2", "status": "unprocessed"},
+            {"kind": "audio", "media_ref": "media_1_3", "status": "unprocessed"},
+            {"kind": "sticker", "media_ref": "media_1_4", "status": "unprocessed"},
+        ]
+        assert "PRIVATE_" not in context
+        assert "https://media.invalid" not in context
+        instructions = services.model_requests[0]["messages"][0]["content"]
+        assert "unprocessed" in instructions
+        assert "unsupported" in instructions
+        assert services.sent == []
+    finally:
+        stop.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize(
+    ("segment", "expected"),
+    [
+        ({"type": "image", "data": {"emoji_id": "42", "file": "PRIVATE"}}, "sticker"),
+        ({"type": "mface", "data": {"file": "PRIVATE"}}, "sticker"),
+        ({"type": "UNTRUSTED_KIND", "data": {"file": "PRIVATE"}}, "unsupported"),
+    ],
+)
+async def test_media_only_messages_expose_safe_types(database_url, services, segment, expected):
+    incoming = message(content="")
+    incoming["message"] = [segment]
+    services.frames = [incoming]
+    services.action = "silence"
+    stop = asyncio.Event()
+    task = asyncio.create_task(run_live(settings(database_url, services), stop))
+    try:
+        await asyncio.wait_for(services.model_started.wait(), 5)
+        stop.set()
+        summary = await asyncio.wait_for(task, 6)
+        assert summary.outcomes == {"silence": 1}
+        context = services.model_requests[0]["messages"][1]["content"]
+        row = json.loads(context)["messages"][-1]
+        assert row["text"] == ""
+        assert row["parts"] == [
+            {
+                "kind": expected,
+                "media_ref": "media_1_1",
+                "status": "unsupported" if expected == "unsupported" else "unprocessed",
+            }
+        ]
+        assert "PRIVATE" not in context
+        assert "UNTRUSTED_KIND" not in context
+        assert services.sent == []
+    finally:
+        stop.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
