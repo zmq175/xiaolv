@@ -52,6 +52,13 @@ def live_environment():
         "XIAOLV_MODEL_ID": "configured-model",
         "XIAOLV_ONEBOT_URL": "ws://localhost:3001",
         "XIAOLV_ONEBOT_TOKEN": "fake-onebot-token",
+        "XIAOLV_QQ_SELF_ID": "10000",
+        "XIAOLV_MODEL_PROVIDER": "synthetic-provider",
+        "XIAOLV_MODEL_PRICE_VERSION": "synthetic-v1",
+        "XIAOLV_MODEL_INPUT_CNY_PER_MILLION": "1",
+        "XIAOLV_MODEL_OUTPUT_CNY_PER_MILLION": "2",
+        "XIAOLV_MONTHLY_EXTERNAL_BUDGET_CNY": "60",
+        "XIAOLV_MONTHLY_FIXED_COST_CNY": "100",
     }
 
 
@@ -81,3 +88,86 @@ def test_unknown_prefixed_key_is_rejected_but_other_environment_is_ignored():
     assert load_settings({"UNRELATED_SECRET": "not-used"}).mode == "replay"
     with pytest.raises(ConfigError):
         load_settings({"XIAOLV_MODLE_ID": "typo"})
+
+
+def test_live_configuration_has_no_enabled_conversations_by_default():
+    settings = load_settings(live_environment())
+    assert settings.qq_self_id == 10000
+    assert settings.enabled_group_ids == ()
+    assert settings.enabled_private_ids == ()
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"XIAOLV_MODEL_CACHED_INPUT_CNY_PER_MILLION": "2"},
+    ],
+)
+def test_cached_input_price_cannot_exceed_normal_price(changes):
+    from xiaolv.settings import ConfigError
+
+    env = live_environment()
+    env.update(changes)
+    with pytest.raises(ConfigError):
+        load_settings(env)
+
+
+async def test_enabled_conversations_require_explicit_json_integer_ids():
+    env = live_environment()
+    env.update(
+        {"XIAOLV_ENABLED_GROUP_IDS": "[20000,30000]", "XIAOLV_ENABLED_PRIVATE_IDS": "[10001]"}
+    )
+    settings = load_settings(env)
+    assert settings.enabled_group_ids == (20000, 30000)
+    assert settings.enabled_private_ids == (10001,)
+
+
+@pytest.mark.parametrize(
+    "value", ["[true]", "[0]", "[1.5]", '["20000"]', '"*"', "[20000,", '{"group":20000}']
+)
+def test_unsafe_conversation_allowlist_is_rejected(value):
+    from xiaolv.settings import ConfigError
+
+    env = live_environment()
+    env["XIAOLV_ENABLED_GROUP_IDS"] = value
+    with pytest.raises(ConfigError):
+        load_settings(env)
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "QQ_SELF_ID",
+        "MODEL_PROVIDER",
+        "MODEL_PRICE_VERSION",
+        "MODEL_INPUT_CNY_PER_MILLION",
+        "MODEL_OUTPUT_CNY_PER_MILLION",
+        "MONTHLY_EXTERNAL_BUDGET_CNY",
+    ],
+)
+def test_live_requires_every_identity_and_budget_field(key):
+    from xiaolv.settings import ConfigError
+
+    env = live_environment()
+    env.pop("XIAOLV_" + key)
+    with pytest.raises(ConfigError):
+        load_settings(env)
+
+
+def test_model_budget_is_independent_of_hosting_cost_and_has_no_200_cny_cap():
+    from decimal import Decimal
+
+    env = live_environment()
+    env["XIAOLV_MONTHLY_EXTERNAL_BUDGET_CNY"] = "1000"
+    env["XIAOLV_MONTHLY_FIXED_COST_CNY"] = "250"
+    settings = load_settings(env)
+    assert settings.monthly_external_budget_cny == Decimal(1000)
+    assert settings.monthly_fixed_cost_cny == Decimal(250)
+
+
+def test_live_startup_does_not_require_hosting_cost_estimate():
+    env = live_environment()
+    env.pop("XIAOLV_MONTHLY_FIXED_COST_CNY")
+    settings = load_settings(env)
+    assert settings.mode == "live"
+    assert settings.monthly_fixed_cost_cny is None

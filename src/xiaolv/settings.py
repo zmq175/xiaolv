@@ -1,10 +1,15 @@
 """Validated startup settings."""
 
+import json
 from collections.abc import Mapping
-from typing import Literal, Self
+from decimal import Decimal
+from typing import Annotated, Literal, Self
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, model_validator
+
+Money = Annotated[Decimal, Field(ge=0, max_digits=20, decimal_places=6, allow_inf_nan=False)]
+QQId = Annotated[int, Field(strict=True, gt=0)]
 
 
 class ConfigError(ValueError):
@@ -21,6 +26,16 @@ class Settings(BaseModel):
     model_id: str | None = None
     onebot_url: str | None = None
     onebot_token: SecretStr | None = None
+    qq_self_id: int | None = Field(default=None, gt=0)
+    enabled_group_ids: tuple[QQId, ...] = ()
+    enabled_private_ids: tuple[QQId, ...] = ()
+    model_provider: str | None = None
+    model_price_version: str | None = None
+    model_input_cny_per_million: Money | None = None
+    model_output_cny_per_million: Money | None = None
+    model_cached_input_cny_per_million: Money | None = None
+    monthly_external_budget_cny: Money | None = None
+    monthly_fixed_cost_cny: Money | None = None
     chat_ttl_seconds: float = Field(default=45, gt=0, allow_inf_nan=False)
     queue_max_age_seconds: float = Field(default=10, gt=0, allow_inf_nan=False)
     model_concurrency: int = Field(default=2, gt=0)
@@ -38,12 +53,27 @@ class Settings(BaseModel):
                 "model_id",
                 "onebot_url",
                 "onebot_token",
+                "model_provider",
+                "model_price_version",
             ):
                 value = getattr(self, name)
                 if isinstance(value, SecretStr):
                     value = value.get_secret_value()
                 if not value or not value.strip():
                     raise ValueError(f"missing {name}")
+            for name in (
+                "qq_self_id",
+                "model_input_cny_per_million",
+                "model_output_cny_per_million",
+                "monthly_external_budget_cny",
+            ):
+                if getattr(self, name) is None:
+                    raise ValueError(f"missing {name}")
+        if self.model_cached_input_cny_per_million is not None and (
+            self.model_input_cny_per_million is None
+            or self.model_cached_input_cny_per_million > self.model_input_cny_per_million
+        ):
+            raise ValueError("invalid cached input price")
         for name, schemes in (
             ("database_url", {"postgresql+psycopg"}),
             ("model_base_url", {"http", "https"}),
@@ -71,11 +101,18 @@ class Settings(BaseModel):
 
 
 def load_settings(environ: Mapping[str, str]) -> Settings:
-    values = {
+    values: dict[str, object] = {
         key.removeprefix("XIAOLV_").lower(): value
         for key, value in environ.items()
         if key.startswith("XIAOLV_")
     }
+    for name in ("enabled_group_ids", "enabled_private_ids"):
+        key = "XIAOLV_" + name.upper()
+        if key in environ:
+            try:
+                values[name] = json.loads(environ[key])
+            except json.JSONDecodeError:
+                raise ConfigError("invalid configuration: " + name) from None
     try:
         return Settings.model_validate(values)
     except ValidationError as error:

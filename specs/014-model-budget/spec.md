@@ -4,7 +4,7 @@
 
 ChatCompletionsGateway可绑定ModelBudget接口：获得并发名额后、HTTP之前reserve(intent)，结束时settle(report)。call_id在预留前生成并贯穿审计，PG不可用/不足额/配置冲突时不调用模型；不足额或配置冲突由TextRuntime返回budget_denied，存储故障返回model_error。生产接线必须绑定预算；不绑定只用于既有协议回放。
 
-BudgetPolicy必须显式提供pool_id、provider_id、model、price_version、模型月额度及人民币每百万输入/输出token单价，可提供缓存输入价。这里只控制外部调用子预算，不能把200元全部当模型额度；宿主机摊销/备份等先从总预算扣除。金额使用Decimal与numeric(20,6)，向上取微元，禁止浮点金额。测试价格为合成价格。
+BudgetPolicy必须显式提供pool_id、provider_id、model、price_version、模型月额度及人民币每百万输入/输出token单价，可提供缓存输入价。根据2026-09-29用户澄清，模型调用额度独立配置，不受200元部署成本参考限制；宿主机、备份等单独评估。金额使用Decimal与numeric(20,6)，向上取微元，禁止浮点金额。测试价格为合成价格。
 
 - AC-001：真实PG原子预留，余额不足时HTTP零调用；已完成调用的预留/实际费用与内容无关用量审计持久化，重建连接不丢失。
 - AC-002：最终有效usage按预留时价格版本结算，缓存缺失按普通输入价；未知usage、失败、取消及崩溃保留预留额，不能因为时间过去而自动释放。

@@ -20,4 +20,6 @@
 
 | [014 模型费用账本](014-model-budget/spec.md) | Verified | PG预留、结算、竞争、跨月与SIGKILL保留 |
 
+| [015 在线文字接线](015-live-text-service/spec.md) | Verified | 本机端到端、CLI信号、门控与恢复；真实平台待验收 |
+
 Verified仅表示该规格明示范围通过验证，不代表完整首版或真实QQ上线验收。每个规格包含spec.md、plan.md、evidence.md。开发流程见CONTRIBUTING.md。
