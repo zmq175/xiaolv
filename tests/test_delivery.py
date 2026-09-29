@@ -50,7 +50,7 @@ async def test_repeated_id_is_delivered_once_and_status_is_queryable():
     assert await service.deliver(outgoing) == "confirmed"
     assert await service.deliver(outgoing) == "confirmed"
     assert platform.sent == [outgoing]
-    assert service.status(outgoing.outgoing_id) == "confirmed"
+    assert await service.status(outgoing.outgoing_id) == "confirmed"
 
 
 async def test_concurrent_duplicate_is_delivered_once():
@@ -78,7 +78,7 @@ async def test_lost_receipt_is_unknown_and_never_retried():
     outgoing = request()
     assert await service.deliver(outgoing) == "unknown"
     assert await service.deliver(outgoing) == "unknown"
-    assert service.status(outgoing.outgoing_id) == "unknown"
+    assert await service.status(outgoing.outgoing_id) == "unknown"
     assert platform.sent == [outgoing]
 
 
@@ -137,7 +137,7 @@ async def test_cancelling_inflight_send_records_unknown_without_retry():
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert service.status(outgoing.outgoing_id) == "unknown"
+    assert await service.status(outgoing.outgoing_id) == "unknown"
     assert await service.deliver(outgoing) == "unknown"
     assert platform.sent == [outgoing]
 
@@ -152,7 +152,7 @@ async def test_explicit_not_sent_is_distinct_from_unknown():
     platform = RejectingPlatform()
     service = DeliveryService(platform, lambda: NOW, lambda _: 3)
     assert await service.deliver(request()) == "not_sent"
-    assert service.status("out-1") == "not_sent"
+    assert await service.status("out-1") == "not_sent"
     assert platform.sent == []
 
 
@@ -162,7 +162,36 @@ async def test_rejected_reply_has_stable_terminal_status():
     service = DeliveryService(platform, lambda: NOW, lambda _: epoch)
     outgoing = request()
     assert await service.deliver(outgoing) == "superseded"
-    assert service.status(outgoing.outgoing_id) == "superseded"
+    assert await service.status(outgoing.outgoing_id) == "superseded"
     epoch = 3
     assert await service.deliver(outgoing) == "superseded"
     assert platform.sent == []
+
+
+async def test_deadline_is_checked_again_after_ledger_claim():
+    readings = iter([NOW, NOW + timedelta(minutes=30)])
+    platform = RecordingPlatform()
+    service = DeliveryService(platform, lambda: next(readings), lambda _: 3)
+    assert await service.deliver(request()) == "expired"
+    assert platform.sent == []
+
+
+async def test_platform_hang_is_bounded_and_retains_unknown_status():
+    stopped = asyncio.Event()
+
+    class HangingPlatform(RecordingPlatform):
+        async def send(self, outgoing):
+            self.sent.append(outgoing)
+            try:
+                await asyncio.Event().wait()
+            finally:
+                stopped.set()
+
+    platform = HangingPlatform()
+    service = DeliveryService(platform, lambda: datetime.now(UTC), lambda _: 3)
+    outgoing = request(expiry=datetime.now(UTC) + timedelta(milliseconds=50))
+    assert await asyncio.wait_for(service.deliver(outgoing), timeout=1) == "unknown"
+    assert stopped.is_set()
+    assert await service.status("out-1") == "unknown"
+    assert await service.deliver(outgoing) == "unknown"
+    assert platform.sent == [outgoing]

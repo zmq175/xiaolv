@@ -58,7 +58,7 @@ class TextRuntime:
             f"{len(candidate.conversation_id)}:{candidate.conversation_id}{candidate.event_id}"
         )
         async with self._locks.setdefault(outgoing_id, asyncio.Lock()):
-            previous = self._delivery.status(outgoing_id)
+            previous = await self._delivery.status(outgoing_id)
             if previous is not None:
                 return previous
             return await self._run(candidate, outgoing_id)

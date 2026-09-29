@@ -33,7 +33,9 @@ uv run mypy src
 PYTHONPATH=src uv run python -m xiaolv.replay
 ```
 
-当前去重和发送状态只保存在内存中，不能用于真实QQ上线。持久化outbox、配置、真实适配器及权限配额仍在开发。
+默认演示使用内存状态；另有PostgreSQL发送账本与配置校验。真实适配器、完整outbox调度及权限配额仍在开发，不能用于真实QQ上线。
+
+数据库开发说明见[持久化测试与迁移](docs/postgres-development.md)。完整进度见[开发状态](docs/development-status.md)。
 
 ## 目录
 

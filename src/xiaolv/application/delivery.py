@@ -1,79 +1,75 @@
-"""Native delivery boundary for deterministic replay."""
+"""Native delivery through a swappable state ledger."""
 
 import asyncio
 from collections.abc import Callable
-from dataclasses import dataclass
-from datetime import datetime
-from typing import Literal, Protocol
+from datetime import UTC, datetime
 
-from xiaolv.domain.conversation.reply_validity import evaluate_reply_validity
+from xiaolv.application.delivery_contracts import (
+    DeliveryLedger,
+    DeliveryRequest,
+    DeliveryStatus,
+    NotSent,
+    PlatformSender,
+)
+from xiaolv.application.memory_delivery import MemoryDeliveryLedger
 
-DeliveryStatus = Literal["confirmed", "unknown", "expired", "superseded", "not_sent"]
-
-
-@dataclass(frozen=True)
-class DeliveryRequest:
-    outgoing_id: str
-    conversation_id: str
-    expires_at: datetime
-    generation_epoch: int
-    text: str
-
-
-class NotSent(Exception):
-    """The adapter can prove the remote platform did not accept this request."""
-
-
-class PlatformSender(Protocol):
-    async def send(self, request: DeliveryRequest) -> Literal["confirmed", "unknown"]: ...
+__all__ = ["DeliveryRequest", "DeliveryService", "DeliveryStatus", "NotSent", "PlatformSender"]
 
 
 class DeliveryService:
     def __init__(
         self,
         platform: PlatformSender,
-        clock: Callable[[], datetime],
-        current_epoch: Callable[[str], int],
+        clock: Callable[[], datetime] | None = None,
+        current_epoch: Callable[[str], int] | None = None,
+        *,
+        ledger: DeliveryLedger | None = None,
     ) -> None:
-        self._lock = asyncio.Lock()
-        self._requests: dict[str, DeliveryRequest] = {}
-        self._results: dict[str, DeliveryStatus] = {}
+        self._clock = clock or (lambda: datetime.now(UTC))
         self._platform = platform
-        self._clock = clock
-        self._current_epoch = current_epoch
+        self._serial: asyncio.Lock | None = None
+        if ledger is None:
+            if clock is None or current_epoch is None:
+                raise ValueError("replay requires clock and current_epoch")
+            ledger = MemoryDeliveryLedger(clock, current_epoch)
+            self._serial = asyncio.Lock()
+        self._ledger = ledger
 
     async def deliver(self, request: DeliveryRequest) -> DeliveryStatus:
-        async with self._lock:
-            previous = self._requests.get(request.outgoing_id)
-            if previous is not None and previous != request:
-                raise ValueError("outgoing_id payload conflict")
-            self._requests[request.outgoing_id] = request
-            if request.outgoing_id in self._results:
-                return self._results[request.outgoing_id]
-            decision = evaluate_reply_validity(
-                request.expires_at,
-                request.generation_epoch,
-                self._current_epoch(request.conversation_id),
-                self._clock(),
-            )
-            if decision.reason == "expired":
-                self._results[request.outgoing_id] = "expired"
-                return "expired"
-            if decision.reason == "superseded":
-                self._results[request.outgoing_id] = "superseded"
-                return "superseded"
-            result: DeliveryStatus
-            try:
-                result = await self._platform.send(request)
-            except asyncio.CancelledError:
-                self._results[request.outgoing_id] = "unknown"
-                raise
-            except NotSent:
-                result = "not_sent"
-            except Exception:  # noqa: BLE001 - after send starts any failure may hide acceptance
-                result = "unknown"
-            self._results[request.outgoing_id] = result
-            return result
+        if self._serial is not None:
+            async with self._serial:
+                return await self._deliver(request)
+        return await self._deliver(request)
 
-    def status(self, outgoing_id: str) -> DeliveryStatus | None:
-        return self._results.get(outgoing_id)
+    async def _deliver(self, request: DeliveryRequest) -> DeliveryStatus:
+        claim = await self._ledger.claim(request)
+        if claim.status is not None:
+            return claim.status
+        if claim.token is None:
+            raise RuntimeError("ledger did not issue a send token")
+        remaining = (
+            request.expires_at.astimezone(UTC) - self._clock().astimezone(UTC)
+        ).total_seconds()
+        if remaining <= 0:
+            return await self._ledger.finish(request.outgoing_id, claim.token, "expired")
+        result: DeliveryStatus
+        try:
+            async with asyncio.timeout(min(10, remaining)):
+                result = await self._platform.send(request)
+        except asyncio.CancelledError:
+            await asyncio.shield(self._ledger.finish(request.outgoing_id, claim.token, "unknown"))
+            raise
+        except NotSent:
+            result = "not_sent"
+        except Exception:  # noqa: BLE001 - platform may have accepted before failure
+            result = "unknown"
+        return await self._ledger.finish(request.outgoing_id, claim.token, result)
+
+    async def status(self, outgoing_id: str) -> DeliveryStatus | None:
+        return await self._ledger.status(outgoing_id)
+
+    async def start_turn(self, conversation_id: str) -> int:
+        return await self._ledger.start_turn(conversation_id)
+
+    async def recover(self) -> int:
+        return await self._ledger.recover()
