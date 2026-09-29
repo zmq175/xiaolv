@@ -28,6 +28,16 @@ jobs:
         with:
           version: "0.12.7"
       - run: uv sync --locked
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - run: npm ci --prefix dashboard
+      - run: npm run format:check --prefix dashboard
+      - run: npm run build --prefix dashboard
+      - run: uv run playwright install --with-deps chromium
+      - run: sudo apt-get install -y fonts-noto-cjk
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy src

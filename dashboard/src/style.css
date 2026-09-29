@@ -1,0 +1,167 @@
+:root {
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  color: #24332c;
+  background: #f4f6f2;
+  font-synthesis: none;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+.topbar {
+  height: 72px;
+  border-bottom: 1px solid #dce3db;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 40px;
+  background: #fbfcf9;
+}
+.brand {
+  font-weight: 650;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  letter-spacing: 0.02em;
+}
+.mark {
+  width: 22px;
+  height: 22px;
+  border-radius: 7px 7px 7px 0;
+  background: #267557;
+}
+.scope {
+  font-size: 13px;
+  color: #64746a;
+}
+main {
+  width: min(440px, calc(100% - 40px));
+  margin: clamp(48px, 12vh, 110px) auto 40px;
+}
+.access {
+  padding: 36px;
+  background: #fff;
+  border: 1px solid #dce3db;
+  border-radius: 12px;
+  box-shadow: 0 8px 30px #233b2b06;
+}
+.accent {
+  height: 4px;
+  width: 32px;
+  background: #267557;
+  margin-bottom: 28px;
+  border-radius: 4px;
+}
+.eyebrow {
+  font-size: 13px;
+  color: #64746a;
+}
+h1 {
+  font-size: 27px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  margin: 9px 0 10px;
+  line-height: 1.4;
+}
+.description {
+  color: #64746a;
+  font-size: 14px;
+  margin: 0 0 32px;
+}
+label {
+  display: block;
+  font-size: 14px;
+  font-weight: 550;
+  margin-bottom: 9px;
+}
+input {
+  width: 100%;
+  height: 46px;
+  padding: 10px 13px;
+  border: 1px solid #b5c3b9;
+  border-radius: 6px;
+  font: inherit;
+  background: #fff;
+  color: inherit;
+}
+button {
+  width: 100%;
+  min-height: 46px;
+  margin-top: 20px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: #267557;
+  color: #fff;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+button:hover:not(:disabled) {
+  background: #1b6045;
+}
+button:disabled {
+  background: #e1e8e1;
+  color: #758177;
+  cursor: not-allowed;
+}
+input:focus-visible,
+button:focus-visible {
+  outline: 3px solid #76b59a;
+  outline-offset: 3px;
+}
+.secondary {
+  background: #fff;
+  color: #275f49;
+  border-color: #a9c4b5;
+}
+.secondary:hover:not(:disabled) {
+  background: #edf4ef;
+}
+.error {
+  font-size: 13px;
+  color: #a12828;
+  line-height: 1.7;
+  margin: 12px 0 0;
+  overflow-wrap: anywhere;
+}
+.session-status {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 14px;
+  padding: 14px 0;
+  border-top: 1px solid #e3e9e3;
+  border-bottom: 1px solid #e3e9e3;
+}
+.status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #267557;
+}
+footer {
+  text-align: center;
+  font-size: 12px;
+  color: #718075;
+  margin-top: 24px;
+}
+@media (max-width: 480px) {
+  .topbar {
+    padding: 0 22px;
+    height: 64px;
+  }
+  .scope {
+    font-size: 12px;
+  }
+  .access {
+    padding: 28px;
+  }
+  h1 {
+    font-size: 25px;
+  }
+}

@@ -25,7 +25,16 @@ uv run ruff format --check .
 uv run mypy src
 ```
 
-运行 `uv run pytest` 执行行为测试。首次环境准备可能需要下载 Python 和依赖。
+行为测试包含真实Chromium管理页面测试，先准备前端与浏览器（Node 24；Linux需可用中文字体）：
+
+```sh
+npm ci --prefix dashboard
+npm run build --prefix dashboard
+uv run playwright install --with-deps chromium
+uv run pytest
+```
+
+首次环境准备可能需要下载Python、前端依赖和浏览器。PG集成测试仍需专用测试DSN，见数据库开发说明；CI会执行前端构建并安装浏览器及中文字体。
 
 本地演示（纯假模型，输出沉默与发送结果，不连接外部服务）：
 
@@ -37,7 +46,7 @@ PYTHONPATH=src uv run python -m xiaolv
 
 数据库开发说明见[持久化测试与迁移](docs/postgres-development.md)。完整进度见[开发状态](docs/development-status.md)。
 
-独立管理进程的密码初始化、认证HTTP启动和SSH访问方式见[管理服务](docs/admin-service.md)。管理网页和配置发布仍在开发，不能将HTTP认证服务视为完整管理端。
+独立管理进程的密码初始化、浏览器登录和SSH访问方式见[管理服务](docs/admin-service.md)。登录/会话/退出页面已接真实接口，配置发布和运行概览仍在开发。
 
 ## 目录
 

@@ -4,6 +4,7 @@ import hashlib
 import math
 import secrets
 from dataclasses import dataclass, field
+from pathlib import Path
 from urllib.parse import urlsplit
 
 import anyio
@@ -15,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 from starlette.middleware.base import RequestResponseEndpoint
+from starlette.staticfiles import StaticFiles
 
 
 @dataclass(frozen=True)
@@ -57,7 +59,9 @@ def _digest(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
 
-def create_admin_app(engine: AsyncEngine, config: AdminConfig) -> FastAPI:
+def create_admin_app(
+    engine: AsyncEngine, config: AdminConfig, *, frontend_dir: Path | None = None
+) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     hasher = PasswordHash.recommended()
     password_slots = anyio.CapacityLimiter(2)
@@ -178,5 +182,20 @@ def create_admin_app(engine: AsyncEngine, config: AdminConfig) -> FastAPI:
             samesite="strict",
         )
         return response
+
+    frontend = (
+        frontend_dir
+        if frontend_dir is not None
+        else Path(__file__).resolve().parents[2] / "dashboard" / "dist"
+    )
+    if (frontend / "index.html").is_file():
+        app.mount("/admin", StaticFiles(directory=frontend, html=True), name="admin-ui")
+    else:
+
+        @app.get("/admin/")
+        async def missing_frontend() -> Response:
+            return Response(
+                "管理页面未构建，请先构建 dashboard。", status_code=503, media_type="text/plain"
+            )
 
     return app

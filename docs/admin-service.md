@@ -1,6 +1,6 @@
 # 独立管理服务
 
-当前提供密码初始化和认证HTTP服务；登录网页、配置发布与运行概览仍待实现。Linux/Python 3.12，管理进程不会启动QQ连接或模型调用。
+当前提供密码初始化、认证HTTP及浏览器登录/会话/退出页面；配置发布与运行概览仍待实现。Linux/Python 3.12，管理进程不会启动QQ连接或模型调用。前端用Node 24构建，部署运行时只需Python服务。
 
 ## 初始化与启动
 
@@ -8,6 +8,8 @@
 
 ```sh
 uv sync --locked
+npm ci --prefix dashboard
+npm run build --prefix dashboard
 mkdir -p runtime
 PYTHONPATH=src uv run python -m xiaolv.admin_server init-password --output runtime/admin.hash
 ```
@@ -26,7 +28,9 @@ PYTHONPATH=src uv run python -m xiaolv.admin_server serve
 
 固定绑定127.0.0.1。远程VPS通过SSH本地转发访问；默认用相同端口，例如`ssh -L 8081:127.0.0.1:8081 your-vps`，浏览器地址为http://127.0.0.1:8081。若转发端口不同，Origin必须设为浏览器实际使用的origin。通过本机反向代理提供HTTPS时配置相应https origin；服务不信任转发头，不能用请求头更改认证来源。
 
-HTTP接口：POST `/admin/api/login`（JSON password且Origin匹配）、GET `/admin/api/session`、POST `/admin/api/logout`（Origin与X-CSRF-Token）。当前没有页面，访问`/admin`不会出现登录表单。未登录session返回401；应用启动日志只表示启动过程开始，可通过HTTP响应确认实际已监听。
+访问`/admin/`进入登录页面。页面与认证API同源，登录后显示真实会话状态，可退出；尚无配置发布和仪表盘，不展示模拟运行数据。未构建前端时页面返回503并提示构建，不影响API。
+
+HTTP接口：POST `/admin/api/login`（JSON password且Origin匹配）、GET `/admin/api/session`、POST `/admin/api/logout`（Origin与X-CSRF-Token）。未登录session返回401；应用启动日志只表示启动过程开始，可通过HTTP响应确认实际已监听。
 
 ## 退出与凭据更换
 
@@ -36,4 +40,4 @@ SIGTERM会让Uvicorn停止请求并完成数据库资源释放。stdout不输出
 
 更换密码时停止所有管理实例，使用init-password生成新的文件，再原子替换原哈希文件并重启全部实例。旧会话绑定旧哈希版本，将无法继续使用；不要让仍使用旧文件的实例留在运行中。init-password刻意不提供静默覆盖，以免误覆盖路径。
 
-尚未验收：真实浏览器页面、VPS部署、HTTPS代理和数据库角色隔离。当前日志生命周期未接独立OTel管理请求span，认证审计和过期会话清理仍待补充。
+本地Chromium已验证登录页面在1280×800与390×844下的登录、刷新和退出，以及网络错误/提交中/限速状态。尚未验收VPS部署、HTTPS代理和数据库角色隔离。当前日志生命周期未接独立OTel管理请求span，认证审计和过期会话清理仍待补充。
