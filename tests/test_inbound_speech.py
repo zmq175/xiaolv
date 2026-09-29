@@ -429,3 +429,45 @@ async def test_private_asr_requires_friend_scope(subtype):
     assert await runtime.run(candidate) == ("confirmed" if subtype == "friend" else "media_error")
     assert len(platform.sent) == (1 if subtype == "friend" else 0)
     assert ("fetch_ptt_text" in rpc.calls) == (subtype == "friend")
+
+
+@pytest.mark.parametrize("processor", ["snowluma-native-asr:v1", "old-processor:v0"])
+async def test_cached_transcript_reuse_requires_matching_processor(processor):
+    import json
+
+    from xiaolv.domain.chat_event import MediaInterpretation
+
+    rpc = NativeRPC(lambda: None)
+    platform = Platform()
+    generator = Generator()
+    audio = MessagePart(
+        "audio",
+        reference="record-ref",
+        interpretation=MediaInterpretation("transcript", "缓存转写", processor),
+    )
+    event = ChatEvent(
+        SCOPE, "qq:10001", "1", "", "群友", NOW, NOW, NOW, parts=(audio,), content_version=3
+    )
+    candidate = ConversationCandidate(
+        SCOPE,
+        "turn",
+        "",
+        NOW + timedelta(seconds=30),
+        1,
+        ConversationContext(1, (event,)),
+        source_message_id="1",
+    )
+    runtime = TextRuntime(
+        ChatCompletionsModel(generator),
+        DeliveryService(platform, lambda: NOW, lambda _: 1),
+        lambda: NOW,
+        inbound_speech=InboundSpeech(
+            OneBotSpeechTranscriber(rpc, {SCOPE: QQTarget("group", 20000)}), [SCOPE]
+        ),
+    )
+    assert await runtime.run(candidate) == "confirmed"
+    cached = processor == "snowluma-native-asr:v1"
+    assert rpc.calls == ([] if cached else ["get_msg", "fetch_ptt_text"])
+    row = json.loads(generator.requests[1]["context"])["messages"][0]
+    assert row["content_version"] == (3 if cached else 4)
+    assert row["parts"][0]["interpretation"]["text"] == ("缓存转写" if cached else "周末再讨论吧")

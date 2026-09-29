@@ -46,6 +46,6 @@
 
 | [040 语音回复闭环](040-voice-reply/spec.md) | In progress | Fish官方SDK、音频产物、原生发送、管理核账及崩溃审计已通过合成服务验证；真实计费/QQ播放待验收 |
 
-| [041 入站媒体与按需理解](041-inbound-media/spec.md) | In progress | 有序媒体清单、未理解/不支持状态及token预算；安全获取、视觉与ASR待完成 |
+| [041 入站媒体与按需理解](041-inbound-media/spec.md) | In progress | 有序媒体清单、token预算、原生ASR及同会话派生版本持久化；下载、视觉/第三方ASR及真实验收待完成 |
 
 Verified仅表示该规格明示范围通过验证，不代表完整首版或真实QQ上线验收。每个规格包含spec.md、plan.md、evidence.md。开发流程见CONTRIBUTING.md。

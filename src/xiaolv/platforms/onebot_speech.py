@@ -10,6 +10,8 @@ from xiaolv.platforms.onebot import OneBotRPC, QQTarget, _message_data
 
 
 class OneBotSpeechTranscriber:
+    processor = "snowluma-native-asr:v1"
+
     def __init__(self, rpc: OneBotRPC, routes: Mapping[str, QQTarget]) -> None:
         self._rpc = rpc
         self._routes = dict(routes)
@@ -52,4 +54,4 @@ class OneBotSpeechTranscriber:
             or not isinstance(data.get("text"), str)
         ):
             raise MediaUnavailable()
-        return MediaInterpretation("transcript", data["text"], "snowluma-native-asr:v1")
+        return MediaInterpretation("transcript", data["text"], self.processor)

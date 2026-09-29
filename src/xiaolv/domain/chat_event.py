@@ -34,6 +34,7 @@ class ChatEvent:
     is_historical: bool = False
     clock_skew: bool = False
     parts: tuple[MessagePart, ...] = ()
+    content_version: int = 1
 
 
 @dataclass(frozen=True)

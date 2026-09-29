@@ -46,6 +46,8 @@ class Services:
         self.message_override = None
         self.transcript = "周六下午三点见。"
         self.transcript_status = "ok"
+        self.transcription_started = asyncio.Event()
+        self.transcription_gate = None
 
     async def onebot(self, ws):
         self.connection = ws
@@ -95,6 +97,9 @@ class Services:
                 )
             elif request["action"] == "fetch_ptt_text":
                 self.transcriptions.append(request["params"])
+                self.transcription_started.set()
+                if self.transcription_gate is not None:
+                    await self.transcription_gate.wait()
                 await ws.send(
                     json.dumps(
                         {
@@ -1378,3 +1383,51 @@ async def test_native_asr_failure_never_generates_reply(database_url, services, 
         stop.set()
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_transcript_survives_restart_in_later_conversation_context(
+    database_url, services, caplog
+):
+    from xiaolv.live import LiveSummary
+
+    incoming = message(content="")
+    incoming["message"] = [{"type": "record", "data": {"file": "PRIVATE_AUDIO"}}]
+    services.frames = [incoming]
+    config = settings(
+        database_url,
+        services,
+        XIAOLV_NATIVE_ASR_CONVERSATIONS='["qq:10000:group:20000"]',
+        XIAOLV_DELIVERY_POLICY='{"cooldown_seconds":0,"window_seconds":60,"max_messages":6}',
+    )
+    caplog.set_level("INFO", logger="xiaolv.storage.media_interpretations")
+    for round_number in range(2):
+        stats = LiveSummary()
+        stop = asyncio.Event()
+        if round_number == 1:
+            services.frames = [message(message_id=2, content="刚才语音约的几点？")]
+        task = asyncio.create_task(run_live(config, stop, statistics=stats))
+        try:
+            await until(lambda stats=stats: bool(stats.outcomes), task)
+            assert stats.outcomes == {"confirmed": 1}
+            stop.set()
+            await asyncio.wait_for(task, 6)
+        finally:
+            stop.set()
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+    assert services.transcriptions == [{"message_id": 1}]
+    second_decision = json.loads(services.model_requests[2]["messages"][1]["content"])
+    original = second_decision["messages"][0]
+    assert original["text"] == ""
+    assert original["parts"][0]["interpretation"]["text"] == "周六下午三点见。"
+    assert original["content_version"] == 2
+    assert second_decision["messages"][1]["content_version"] == 1
+    saved = [
+        record
+        for record in caplog.records
+        if getattr(record, "event", "") == "media_interpretation_saved"
+    ]
+    assert len(saved) == 1
+    assert saved[0].fields["content_version"] == "2"
+    assert "PRIVATE_AUDIO" not in caplog.text
+    assert "周六下午三点见" not in caplog.text

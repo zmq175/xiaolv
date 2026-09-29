@@ -40,6 +40,7 @@ class ContextAssembler:
                 event = events[i]
                 row: dict[str, Any] = {
                     "message_ref": f"message_{i + 1}",
+                    "content_version": event.content_version,
                     "account": event.sender_account_id,
                     "name": event.display_name[:128],
                     "text": event.text,

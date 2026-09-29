@@ -33,6 +33,7 @@ from xiaolv.platforms.onebot_ws import OneBotWebSocket
 from xiaolv.settings import ConfigError, Settings, SpeechSettings
 from xiaolv.storage.audio_artifacts import LocalAudioArtifacts
 from xiaolv.storage.conversation_control import ConversationControl
+from xiaolv.storage.media_interpretations import PostgresInterpretations
 from xiaolv.storage.postgres_budget import PostgresModelBudget
 from xiaolv.storage.postgres_delivery import PostgresDeliveryLedger
 from xiaolv.storage.postgres_inbox import PostgresInbox
@@ -231,7 +232,9 @@ async def run_live(
                     profile_loader=PublishedProfiles(engine, settings.bot_profile).load,
                     voice_delivery=voice_delivery,
                     inbound_speech=InboundSpeech(
-                        OneBotSpeechTranscriber(rpc, routes), settings.native_asr_conversations
+                        OneBotSpeechTranscriber(rpc, routes),
+                        settings.native_asr_conversations,
+                        store=PostgresInterpretations(engine),
                     )
                     if settings.native_asr_conversations
                     else None,

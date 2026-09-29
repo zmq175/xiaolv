@@ -18,15 +18,33 @@ class MediaUnavailable(Exception):
 
 
 class SpeechTranscriber(Protocol):
+    processor: str
+
     async def transcribe(
         self, event: ChatEvent, part_index: int, expires_at: datetime
     ) -> MediaInterpretation: ...
 
 
+class InterpretationStore(Protocol):
+    async def save(
+        self,
+        candidate: "ConversationCandidate",
+        event: ChatEvent,
+        part_index: int,
+        interpretation: MediaInterpretation,
+    ) -> ChatEvent: ...
+
+
 class InboundSpeech:
-    def __init__(self, transcriber: SpeechTranscriber, conversations: Collection[str]) -> None:
+    def __init__(
+        self,
+        transcriber: SpeechTranscriber,
+        conversations: Collection[str],
+        store: InterpretationStore | None = None,
+    ) -> None:
         self._transcriber = transcriber
         self._conversations = frozenset(conversations)
+        self._store = store
 
     async def enrich(self, candidate: "ConversationCandidate") -> "ConversationCandidate":
         if candidate.conversation_id not in self._conversations:
@@ -43,6 +61,15 @@ class InboundSpeech:
             if len(audio) != 1 or event.conversation_id != candidate.conversation_id:
                 raise MediaUnavailable()
             part_index = audio[0]
+            cached = event.parts[part_index].interpretation
+            if (
+                cached is not None
+                and cached.processor == self._transcriber.processor
+                and cached.kind == "transcript"
+                and cached.text.strip()
+                and len(cached.text) <= 3000
+            ):
+                continue
             try:
                 interpretation = await self._transcriber.transcribe(
                     event, part_index, candidate.expires_at
@@ -55,5 +82,12 @@ class InboundSpeech:
                 raise MediaUnavailable()
             parts = list(event.parts)
             parts[part_index] = replace(parts[part_index], interpretation=interpretation)
-            messages[index] = replace(event, parts=tuple(parts))
+            if self._store is not None:
+                messages[index] = await self._store.save(
+                    candidate, event, part_index, interpretation
+                )
+            else:
+                messages[index] = replace(
+                    event, parts=tuple(parts), content_version=event.content_version + 1
+                )
         return replace(candidate, context=replace(candidate.context, messages=tuple(messages)))
