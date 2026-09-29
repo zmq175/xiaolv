@@ -5,6 +5,7 @@ import math
 import re
 import secrets
 from dataclasses import dataclass, field
+from decimal import Decimal
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -22,6 +23,7 @@ from starlette.staticfiles import StaticFiles
 from xiaolv.domain.bot_profile import BotProfile
 from xiaolv.storage.conversation_control import ConversationControl
 from xiaolv.storage.profile_publication import ProfilePublication, PublicationError
+from xiaolv.storage.speech_reconciliation import SpeechReconciliation
 
 
 @dataclass(frozen=True)
@@ -69,6 +71,12 @@ class _ConversationWrite(_ProfileWrite):
     enabled: bool
 
 
+class _SpeechReconcile(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True, str_strip_whitespace=True)
+    charged_cny: Decimal = Field(ge=0, max_digits=20, decimal_places=6, allow_inf_nan=False)
+    evidence: str = Field(min_length=1, max_length=1000)
+
+
 class _DraftWrite(_ProfileWrite):
     profile: BotProfile
 
@@ -90,6 +98,7 @@ def create_admin_app(
     credential_version = _digest(config.password_hash)
     profiles = ProfilePublication(engine)
     conversations = ConversationControl(engine)
+    speech_costs = SpeechReconciliation(engine)
 
     @app.exception_handler(PublicationError)
     async def publication_error(request: Request, error: PublicationError) -> JSONResponse:
@@ -242,6 +251,26 @@ def create_admin_app(
         if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", key) is None:
             raise HTTPException(422, "invalid_idempotency_key")
         return key
+
+    @app.get("/admin/api/speech-calls")
+    async def list_speech_calls(
+        request: Request,
+        limit: int = Query(20, ge=1, le=50),
+        after: str = Query("", max_length=512),
+    ) -> JSONResponse:
+        await session(request)
+        return JSONResponse(await speech_costs.list(limit, after))
+
+    @app.post("/admin/api/speech-calls/{call_id}/reconcile")
+    async def reconcile_speech(
+        call_id: str, body: _SpeechReconcile, request: Request
+    ) -> JSONResponse:
+        key = await require_write(request)
+        return JSONResponse(
+            await speech_costs.reconcile(
+                call_id, body.charged_cny, body.evidence, key, credential_version
+            )
+        )
 
     @app.get("/admin/api/conversations")
     async def list_conversations(
