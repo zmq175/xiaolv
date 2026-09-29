@@ -1,0 +1,5 @@
+# 实施
+
+通过管理HTTP写入真实隔离PG，再经TextRuntime回放观察模型外部生成边界的提示和发送结果。每个行为先失败后实现。
+
+在BotProfile旁定义冻结快照；PG读取器仅SELECT app当前指针和release。TextRuntime可选异步读取器在单个回合截止时间内绑定快照到不可变候选副本。ChatCompletionsModel优先使用候选快照，保留未配置读取器的现有启动人设。在线live组装显式接入读取器。

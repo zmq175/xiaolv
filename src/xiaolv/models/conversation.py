@@ -73,18 +73,21 @@ class ChatCompletionsModel:
         self._quote_conversations = frozenset(quote_conversations)
         self._ordered_conversations = frozenset(ordered_conversations)
 
-    def _instructions(self, stage: str) -> str:
+    def _instructions(self, stage: str, candidate: ConversationCandidate) -> str:
         template = files("xiaolv.prompts").joinpath(stage + ".txt").read_text(encoding="utf-8")
         rules = template.format(max_reply_chars=self._max_reply_chars)
+        profile = (
+            candidate.profile_snapshot.profile if candidate.profile_snapshot else self._profile
+        )
         return (
             rules
             + "\n管理员配置的机器人资料（JSON）：\n"
-            + json.dumps(self._profile.model_dump(), ensure_ascii=False)
+            + json.dumps(profile.model_dump(), ensure_ascii=False)
         )
 
     async def decide(self, candidate: ConversationCandidate) -> Literal["respond", "silence"]:
         result = await self._generator.generate(
-            instructions=self._instructions("participation"),
+            instructions=self._instructions("participation", candidate),
             context=self._context(candidate),
             schema=_Decision.model_json_schema(),
             expires_at=candidate.expires_at,
@@ -108,7 +111,7 @@ class ChatCompletionsModel:
             else _Reply
         )
         result = await self._generator.generate(
-            instructions=self._instructions("reply"),
+            instructions=self._instructions("reply", candidate),
             context=context,
             schema=schema_type.model_json_schema(),
             expires_at=candidate.expires_at,

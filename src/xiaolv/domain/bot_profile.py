@@ -1,5 +1,6 @@
 """Administrator-supplied persona, independent of platform account identity."""
 
+from dataclasses import dataclass
 from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
@@ -19,3 +20,9 @@ class BotProfile(BaseModel):
     reply_style: str = Field(
         default="自然简短，贴合当前话题，不写客服式开场或长篇总结。", max_length=1000
     )
+
+
+@dataclass(frozen=True)
+class ProfileSnapshot:
+    profile: BotProfile
+    version: int | None = None

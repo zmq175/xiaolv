@@ -42,4 +42,6 @@
 
 | [033 人设草稿与发布](033-profile-publication/spec.md) | Verified | HTTP草稿/发布/回滚、并发版本与持久幂等；网页编辑和聊天采用待接线 |
 
+| [034 回合人设快照](034-turn-profile/spec.md) | Verified | 管理发布进入在线模型提示、整回合固定版本、回滚/草稿隔离、TTL与版本日志 |
+
 Verified仅表示该规格明示范围通过验证，不代表完整首版或真实QQ上线验收。每个规格包含spec.md、plan.md、evidence.md。开发流程见CONTRIBUTING.md。

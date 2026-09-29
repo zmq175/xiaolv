@@ -231,3 +231,65 @@ def test_replay_demo_runs_without_network_or_credentials():
     assert data["mode"] == "local_fake_replay"
     assert data["outcomes"] == ["silence", "confirmed"]
     assert data["sent"] == ["我也在听，你们继续。"]
+
+
+async def test_profile_read_failure_stops_before_model_and_send():
+    calls = []
+
+    class Model(ReplyModel):
+        async def decide(self, candidate):
+            calls.append(candidate)
+            return "respond"
+
+    async def load():
+        raise ConnectionError("synthetic unavailable profile database")
+
+    runtime, platform = setup(Model(), profile_loader=load)
+    assert await runtime.run(candidate()) == "profile_error"
+    assert calls == []
+    assert platform.sent == []
+
+
+async def test_profile_read_uses_turn_deadline_and_cancels_before_generation():
+    import asyncio
+    from dataclasses import replace
+
+    cancelled = asyncio.Event()
+    calls = []
+
+    async def load():
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    class Model(ReplyModel):
+        async def decide(self, candidate):
+            calls.append(candidate)
+            return "respond"
+
+    runtime, platform = setup(Model(), profile_loader=load)
+    event = replace(candidate(), expires_at=NOW + timedelta(seconds=0.03))
+    assert await asyncio.wait_for(runtime.run(event), 1) == "expired"
+    assert cancelled.is_set()
+    assert calls == []
+    assert platform.sent == []
+
+
+async def test_expired_turn_does_not_read_profile():
+    from dataclasses import replace
+
+    from xiaolv.domain.bot_profile import BotProfile, ProfileSnapshot
+
+    calls = []
+
+    async def load():
+        calls.append(True)
+        return ProfileSnapshot(BotProfile())
+
+    runtime, platform = setup(ReplyModel(), profile_loader=load)
+    assert await runtime.run(replace(candidate(), expires_at=NOW)) == "expired"
+    assert calls == []
+    assert await runtime.run(candidate()) == "confirmed"
+    assert calls == [True]
+    assert len(platform.sent) == 1

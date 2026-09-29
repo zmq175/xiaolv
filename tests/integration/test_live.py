@@ -759,7 +759,10 @@ async def test_live_uses_configured_persona_and_reply_limit(database_url, servic
         await asyncio.gather(task, return_exceptions=True)
 
 
-async def test_live_quota_drops_next_reply_instead_of_queueing_it(database_url, services):
+async def test_live_quota_drops_next_reply_instead_of_queueing_it(database_url, services, caplog):
+    import logging
+
+    caplog.set_level(logging.INFO)
     from xiaolv.live import LiveSummary
 
     stats = LiveSummary()
@@ -777,6 +780,7 @@ async def test_live_quota_drops_next_reply_instead_of_queueing_it(database_url, 
         stop.set()
         summary = await asyncio.wait_for(task, 6)
         assert summary.outcomes == {"confirmed": 1, "rate_limited": 1}
+        assert sum(getattr(r, "event", None) == "profile_selected" for r in caplog.records) == 1
         assert len(services.sent) == 1
         assert len(services.model_requests) == 2
     finally:
@@ -850,6 +854,36 @@ async def test_online_ordered_reply_rejects_invalid_intent(database_url, service
         assert stats.outcomes == {expected: 1}
         assert services.sent == []
         assert services.member_queries == []
+    finally:
+        stop.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_online_turn_uses_admin_published_persona(database_url, services):
+    from pwdlib import PasswordHash
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from test_admin_auth import PASSWORD, client
+    from test_profile_publication import PROFILE
+    from test_turn_profile import save_publish
+
+    engine = create_async_engine(database_url, hide_parameters=True)
+    try:
+        async with client(engine, PasswordHash.recommended().hash(PASSWORD)) as http:
+            login = await http.post("/admin/api/login", json={"password": PASSWORD})
+            http.headers["X-CSRF-Token"] = login.json()["csrf_token"]
+            await save_publish(http, PROFILE, 0, "live")
+    finally:
+        await engine.dispose()
+    stop = asyncio.Event()
+    task = asyncio.create_task(run_live(settings(database_url, services), stop))
+    try:
+        await asyncio.wait_for(services.delivered.wait(), 5)
+        stop.set()
+        await asyncio.wait_for(task, 6)
+        assert len(services.model_requests) == 2
+        for request in services.model_requests:
+            assert '"name": "青禾"' in request["messages"][0]["content"]
     finally:
         stop.set()
         task.cancel()

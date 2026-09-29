@@ -27,6 +27,7 @@ from xiaolv.storage.postgres_delivery import PostgresDeliveryLedger
 from xiaolv.storage.postgres_inbox import PostgresInbox
 from xiaolv.storage.postgres_model_capacity import PostgresModelCapacity
 from xiaolv.storage.postgres_turns import CandidatePolicy, PostgresTurns
+from xiaolv.storage.published_profile import PublishedProfiles
 from xiaolv.storage.schema import schema_is_current
 
 
@@ -147,6 +148,7 @@ async def run_live(
                     delivery,
                     clock,
                     max_chars=settings.max_reply_chars,
+                    profile_loader=PublishedProfiles(engine, settings.bot_profile).load,
                 ),
             )
             await delivery.recover()

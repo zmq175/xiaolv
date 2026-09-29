@@ -2,14 +2,15 @@
 
 import asyncio
 import logging
-from collections.abc import Callable
-from dataclasses import dataclass, field
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Literal, Protocol, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
 from xiaolv.application.delivery import DeliveryRequest, DeliveryService
+from xiaolv.domain.bot_profile import ProfileSnapshot
 from xiaolv.domain.chat_event import ConversationContext
 from xiaolv.domain.model_budget import BudgetDenied
 from xiaolv.domain.text_reply import TextPart, TextReply, validate_text_parts
@@ -23,6 +24,7 @@ class ConversationCandidate:
     expires_at: datetime
     generation_epoch: int
     context: ConversationContext = field(default_factory=lambda: ConversationContext(0, ()))
+    profile_snapshot: ProfileSnapshot | None = None
 
 
 class ConversationModel(Protocol):
@@ -47,9 +49,11 @@ class TextRuntime:
         delivery: DeliveryService,
         clock: Callable[[], datetime],
         max_chars: int = 200,
+        profile_loader: Callable[[], Awaitable[ProfileSnapshot]] | None = None,
     ) -> None:
         self._locks: dict[str, asyncio.Lock] = {}
         self._model = model
+        self._profile_loader = profile_loader
         self._delivery = delivery
         self._clock = clock
         self._max_chars = max_chars
@@ -91,6 +95,27 @@ class TextRuntime:
         deadline = asyncio.timeout_at(expires)
         try:
             async with deadline:
+                if self._profile_loader is not None:
+                    try:
+                        snapshot = await self._profile_loader()
+                    except Exception:  # noqa: BLE001 - no stale fallback or exception body exposure
+                        return "profile_error"
+                    candidate = replace(candidate, profile_snapshot=snapshot)
+                    logging.getLogger(__name__).info(
+                        "回合人设已选择",
+                        extra={
+                            "event": "profile_selected",
+                            "fields": {
+                                "turn_id": candidate.event_id,
+                                "profile_source": "startup"
+                                if snapshot.version is None
+                                else "published",
+                                "profile_version": str(snapshot.version)
+                                if snapshot.version is not None
+                                else "none",
+                            },
+                        },
+                    )
                 state = await self._graph.ainvoke({"candidate": candidate})
         except BudgetDenied:
             return "budget_denied"
