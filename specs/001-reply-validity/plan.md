@@ -1,6 +1,6 @@
 # SPEC-001实施计划
 
-先确认evaluate_reply_validity这一公共测试边界。确认后记录日期/来源，将状态改Ready，然后写第一个失败测试。
+2026-09-29用户确认evaluate_reply_validity公共测试边界，规格经过Ready进入Implementing。
 
 测试文件拟为tests/test_reply_validity.py，实现位置拟为src/xiaolv/domain/conversation/reply_validity.py；文件位置不构成测试断言。用显式时间参数避免真实sleep，无外部依赖。
 
