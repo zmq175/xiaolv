@@ -1,10 +1,10 @@
 # 独立管理服务
 
-当前提供密码初始化、认证HTTP及浏览器登录/会话/退出页面；配置发布与运行概览仍待实现。Linux/Python 3.12，管理进程不会启动QQ连接或模型调用。前端用Node 24构建，部署运行时只需Python服务。
+当前提供密码初始化、认证HTTP及浏览器登录/会话/退出页面，以及人设草稿、发布和回滚HTTP接口。网页配置编辑、聊天采用发布版本与运行概览仍待实现。Linux/Python 3.12，管理进程不会启动QQ连接或模型调用。前端用Node 24构建，部署运行时只需Python服务。
 
 ## 初始化与启动
 
-先按[数据库说明](postgres-development.md)以迁移角色显式执行迁移至head。管理服务只检查版本，不自动建表。建议为管理服务单独配置数据库角色：可读公共alembic_version，可使用admin schema并操作其会话/限速表；聊天角色不授予admin schema访问。当前尚无角色自动创建脚本，必须由部署配置落实。
+先按[数据库说明](postgres-development.md)以迁移角色显式执行迁移至head。管理服务只检查版本，不自动建表。建议为管理服务单独配置数据库角色：可读公共alembic_version，可使用admin schema并操作会话、限速和配置管理表，以及app schema中的人设发布表和序列；聊天角色不授予admin schema访问。当前尚无角色自动创建脚本，必须由部署配置落实。
 
 ```sh
 uv sync --locked
@@ -41,3 +41,15 @@ SIGTERM会让Uvicorn停止请求并完成数据库资源释放。stdout不输出
 更换密码时停止所有管理实例，使用init-password生成新的文件，再原子替换原哈希文件并重启全部实例。旧会话绑定旧哈希版本，将无法继续使用；不要让仍使用旧文件的实例留在运行中。init-password刻意不提供静默覆盖，以免误覆盖路径。
 
 本地Chromium已验证登录页面在1280×800与390×844下的登录、刷新和退出，以及网络错误/提交中/限速状态。尚未验收VPS部署、HTTPS代理和数据库角色隔离。当前日志生命周期未接独立OTel管理请求span，认证审计和过期会话清理仍待补充。
+
+## 人设配置HTTP接口
+
+- GET `/admin/api/profile`读取管理版本、草稿及已发布快照；首次草稿和发布均为null。
+- PUT `/admin/api/profile/draft`提交`expected_version`和`profile`，只保存草稿。
+- POST `/admin/api/profile/publish`提交`expected_version`，将草稿创建为新的发布版本。
+- POST `/admin/api/profile/rollback`提交`expected_version`和`release_version`，复制旧快照为新发布，保留当前草稿。
+- GET `/admin/api/profile/releases/{version}`读取指定快照。
+
+上述接口均要求登录；写入还要求Origin、X-CSRF-Token与Idempotency-Key（1–128位字母、数字、下划线或连字符）。管理version用于并发控制，陈旧写入返回409。相同幂等键重试相同请求返回原操作结果；键复用于不同请求返回409。重试结果可能早于当前状态，需重新GET核对最新状态。字段校验422只返回位置和错误类型。
+
+目前“已发布”仅表示控制面事务已提交，不表示聊天进程已采用；聊天仍使用启动配置。发布历史由接口保持不变，不声称能够防止具有数据库写权限的操作员直接修改记录。角色授权及聊天版本确认将在后续接线中落实。

@@ -2,6 +2,7 @@
 
 import hashlib
 import math
+import re
 import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -17,6 +18,9 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.staticfiles import StaticFiles
+
+from xiaolv.domain.bot_profile import BotProfile
+from xiaolv.storage.profile_publication import ProfilePublication, PublicationError
 
 
 @dataclass(frozen=True)
@@ -55,6 +59,19 @@ class _Login(BaseModel):
     password: SecretStr = Field(min_length=1, max_length=1024)
 
 
+class _ProfileWrite(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid", hide_input_in_errors=True)
+    expected_version: int = Field(ge=0)
+
+
+class _DraftWrite(_ProfileWrite):
+    profile: BotProfile
+
+
+class _RollbackWrite(_ProfileWrite):
+    release_version: int = Field(gt=0)
+
+
 def _digest(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
@@ -66,6 +83,11 @@ def create_admin_app(
     hasher = PasswordHash.recommended()
     password_slots = anyio.CapacityLimiter(2)
     credential_version = _digest(config.password_hash)
+    profiles = ProfilePublication(engine)
+
+    @app.exception_handler(PublicationError)
+    async def publication_error(request: Request, error: PublicationError) -> JSONResponse:
+        return JSONResponse({"detail": error.code}, status_code=error.status)
 
     @app.middleware("http")
     async def management_headers(request: Request, call_next: RequestResponseEndpoint) -> Response:
@@ -80,6 +102,27 @@ def create_admin_app(
     @app.exception_handler(RequestValidationError)
     async def invalid_request(request: Request, error: RequestValidationError) -> JSONResponse:
         # FastAPI's default validation response includes submitted input, even secrets.
+        if request.url.path.startswith("/admin/api/profile"):
+            fields = {
+                "body",
+                "path",
+                "profile",
+                "expected_version",
+                "release_version",
+                "version",
+                *BotProfile.model_fields,
+            }
+            errors = [
+                {
+                    "loc": [
+                        part if isinstance(part, int) or part in fields else "unknown_field"
+                        for part in issue["loc"]
+                    ],
+                    "type": issue["type"],
+                }
+                for issue in error.errors()
+            ]
+            return JSONResponse({"detail": "invalid_request", "errors": errors}, status_code=422)
         return JSONResponse({"detail": "invalid_request"}, status_code=422)
 
     async def session(request: Request) -> dict[str, str]:
@@ -182,6 +225,48 @@ def create_admin_app(
             samesite="strict",
         )
         return response
+
+    async def require_write(request: Request) -> str:
+        active = await session(request)
+        if not secrets.compare_digest(
+            request.headers.get("x-csrf-token", ""), active["csrf_token"]
+        ):
+            raise HTTPException(403, "csrf_required")
+        key = request.headers.get("idempotency-key", "")
+        if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", key) is None:
+            raise HTTPException(422, "invalid_idempotency_key")
+        return key
+
+    @app.get("/admin/api/profile")
+    async def current_profile(request: Request) -> JSONResponse:
+        await session(request)
+        return JSONResponse(await profiles.current())
+
+    @app.put("/admin/api/profile/draft")
+    async def save_profile(body: _DraftWrite, request: Request) -> JSONResponse:
+        key = await require_write(request)
+        return JSONResponse(
+            await profiles.change("draft", body.profile, body.expected_version, key)
+        )
+
+    @app.post("/admin/api/profile/publish")
+    async def publish_profile(body: _ProfileWrite, request: Request) -> JSONResponse:
+        key = await require_write(request)
+        return JSONResponse(await profiles.change("publish", None, body.expected_version, key))
+
+    @app.post("/admin/api/profile/rollback")
+    async def rollback_profile(body: _RollbackWrite, request: Request) -> JSONResponse:
+        key = await require_write(request)
+        return JSONResponse(
+            await profiles.change(
+                "rollback", None, body.expected_version, key, body.release_version
+            )
+        )
+
+    @app.get("/admin/api/profile/releases/{version}")
+    async def profile_release(version: int, request: Request) -> JSONResponse:
+        await session(request)
+        return JSONResponse(await profiles.release(version))
 
     frontend = (
         frontend_dir

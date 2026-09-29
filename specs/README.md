@@ -40,4 +40,6 @@
 | [031 独立管理服务](031-admin-server/spec.md) | Verified | 密码文件初始化、真实子进程HTTP登录/停止、配置与schema门禁；浏览器页面待完成 |
 | [032 管理登录页面](032-admin-login-ui/spec.md) | Verified | React同源页面、真实浏览器登录/刷新/退出、断网/限速/键盘和双视口；配置发布待实现 |
 
+| [033 人设草稿与发布](033-profile-publication/spec.md) | Verified | HTTP草稿/发布/回滚、并发版本与持久幂等；网页编辑和聊天采用待接线 |
+
 Verified仅表示该规格明示范围通过验证，不代表完整首版或真实QQ上线验收。每个规格包含spec.md、plan.md、evidence.md。开发流程见CONTRIBUTING.md。
