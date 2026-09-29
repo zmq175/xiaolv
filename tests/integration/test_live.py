@@ -767,6 +767,7 @@ async def test_live_quota_drops_next_reply_instead_of_queueing_it(database_url, 
         summary = await asyncio.wait_for(task, 6)
         assert summary.outcomes == {"confirmed": 1, "rate_limited": 1}
         assert len(services.sent) == 1
+        assert len(services.model_requests) == 2
     finally:
         stop.set()
         task.cancel()

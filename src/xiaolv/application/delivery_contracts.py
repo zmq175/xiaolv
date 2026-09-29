@@ -35,6 +35,8 @@ class PlatformSender(Protocol):
 
 
 class DeliveryLedger(Protocol):
+    async def can_send(self, conversation_id: str) -> bool: ...
+
     async def claim(self, request: DeliveryRequest) -> DeliveryClaim: ...
 
     async def finish(

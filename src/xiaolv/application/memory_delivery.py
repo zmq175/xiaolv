@@ -15,6 +15,9 @@ class MemoryDeliveryLedger:
         self._results: dict[str, DeliveryStatus] = {}
         self._epochs: dict[str, int] = {}
 
+    async def can_send(self, conversation_id: str) -> bool:
+        return True
+
     async def claim(self, request: DeliveryRequest) -> DeliveryClaim:
         previous = self._requests.get(request.outgoing_id)
         if previous is not None and previous != request:

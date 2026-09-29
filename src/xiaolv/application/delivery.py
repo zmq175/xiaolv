@@ -109,6 +109,10 @@ class DeliveryService:
     async def status(self, outgoing_id: str) -> DeliveryStatus | None:
         return await self._ledger.status(outgoing_id)
 
+    async def can_send(self, conversation_id: str) -> bool:
+        """Read-only hint; never substitutes for the final atomic claim."""
+        return await self._ledger.can_send(conversation_id)
+
     async def start_turn(self, conversation_id: str) -> int:
         return await self._ledger.start_turn(conversation_id)
 

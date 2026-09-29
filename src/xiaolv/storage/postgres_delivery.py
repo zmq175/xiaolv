@@ -7,7 +7,7 @@ from typing import cast
 from uuid import uuid4
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from xiaolv.application.delivery_contracts import DeliveryClaim, DeliveryRequest, DeliveryStatus
 from xiaolv.domain.conversation.reply_validity import evaluate_reply_validity
@@ -25,6 +25,47 @@ class PostgresDeliveryLedger:
         self._engine = engine
         self._lease_seconds = lease_seconds
         self._policy = policy
+
+    async def can_send(self, conversation_id: str) -> bool:
+        if self._policy is None:
+            return True
+        async with self._engine.connect() as connection:
+            now: datetime = (
+                await connection.execute(text("SELECT clock_timestamp()"))
+            ).scalar_one()
+            return await self._quota_available(connection, conversation_id, now)
+
+    async def _quota_available(
+        self, connection: AsyncConnection, conversation_id: str, now: datetime
+    ) -> bool:
+        if self._policy is None:
+            return True
+        quota = (
+            (
+                await connection.execute(
+                    text("""
+            SELECT count(*) FILTER (WHERE claimed_at > :now - :window * interval '1 second') AS used,
+                   max(claimed_at) AS latest
+            FROM app.outbox
+            WHERE conversation_id = :conversation_id
+              AND status IN ('sending', 'confirmed', 'unknown')
+              AND claimed_at > :now - :horizon * interval '1 second'
+        """),
+                    {
+                        "now": now,
+                        "window": self._policy.window_seconds,
+                        "horizon": max(self._policy.window_seconds, self._policy.cooldown_seconds),
+                        "conversation_id": conversation_id,
+                    },
+                )
+            )
+            .mappings()
+            .one()
+        )
+        latest = quota["latest"]
+        return quota["used"] < self._policy.max_messages and (
+            latest is None or (now - latest).total_seconds() >= self._policy.cooldown_seconds
+        )
 
     async def start_turn(self, conversation_id: str) -> int:
         async with self._engine.begin() as connection:
@@ -74,37 +115,10 @@ class PostgresDeliveryLedger:
             terminal: DeliveryStatus | None = None
             if decision.reason in ("expired", "superseded"):
                 terminal = decision.reason
-            if terminal is None and self._policy is not None:
-                quota = (
-                    (
-                        await connection.execute(
-                            text("""
-                    SELECT count(*) FILTER (WHERE claimed_at > :now - :window * interval '1 second') AS used,
-                           max(claimed_at) AS latest
-                    FROM app.outbox
-                    WHERE conversation_id = :conversation_id
-                      AND status IN ('sending', 'confirmed', 'unknown')
-                      AND claimed_at > :now - :horizon * interval '1 second'
-                """),
-                            {
-                                "now": now,
-                                "window": self._policy.window_seconds,
-                                "horizon": max(
-                                    self._policy.window_seconds, self._policy.cooldown_seconds
-                                ),
-                                "conversation_id": request.conversation_id,
-                            },
-                        )
-                    )
-                    .mappings()
-                    .one()
-                )
-                latest = quota["latest"]
-                if quota["used"] >= self._policy.max_messages or (
-                    latest is not None
-                    and (now - latest).total_seconds() < self._policy.cooldown_seconds
-                ):
-                    terminal = "rate_limited"
+            if terminal is None and not await self._quota_available(
+                connection, request.conversation_id, now
+            ):
+                terminal = "rate_limited"
             token = uuid4().hex
             await connection.execute(
                 text("""

@@ -77,7 +77,17 @@ class TextRuntime:
         remaining = (candidate.expires_at.astimezone(UTC) - now.astimezone(UTC)).total_seconds()
         if remaining <= 0:
             return "expired"
-        deadline = asyncio.timeout(remaining)
+        expires = asyncio.get_running_loop().time() + remaining
+        preflight_deadline = asyncio.timeout_at(expires)
+        try:
+            async with preflight_deadline:
+                if not await self._delivery.can_send(candidate.conversation_id):
+                    return "rate_limited"
+        except TimeoutError:
+            if preflight_deadline.expired():
+                return "expired"
+            raise
+        deadline = asyncio.timeout_at(expires)
         try:
             async with deadline:
                 state = await self._graph.ainvoke({"candidate": candidate})

@@ -569,3 +569,32 @@ async def test_quota_migration_rollback_preserves_rejection_without_resend(datab
         assert platform.sent == [request]
     finally:
         await engine.dispose()
+
+
+async def test_quota_preflight_is_readonly_and_final_claim_rechecks_after_race(database_url):
+    from dataclasses import replace
+
+    from xiaolv.domain.delivery_policy import DeliveryPolicy
+
+    engines = [create_async_engine(database_url, hide_parameters=True) for _ in range(2)]
+    platform = RecordingPlatform()
+    try:
+        services = [
+            DeliveryService(
+                platform,
+                ledger=PostgresDeliveryLedger(
+                    engine, policy=DeliveryPolicy(cooldown_seconds=0, max_messages=1)
+                ),
+            )
+            for engine in engines
+        ]
+        request = outgoing(await services[0].start_turn("chat-1"))
+        assert await services[0].can_send("chat-1") is True
+        assert await services[1].can_send("chat-1") is True
+        assert await services[1].deliver(request) == "confirmed"
+        assert await services[0].can_send("chat-1") is False
+        assert await services[0].deliver(replace(request, outgoing_id="late")) == "rate_limited"
+        assert platform.sent == [request]
+    finally:
+        for engine in engines:
+            await engine.dispose()
