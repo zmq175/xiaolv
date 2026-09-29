@@ -8,3 +8,9 @@
 4. 完整回放、供应商替换、文字零合成、停用/迟到、幂等和降级故障矩阵；真实账号验收单独保留。
 
 官方SDK可行性证据见sdk-probe.md；可复现脚本tools/probes/fish_sdk_contract.py只使用合成httpx传输，不调用公网API。当前未添加生产依赖，避免把尚未使用的SDK混入运行路径。
+
+## 当前接口落地
+
+VoiceReply只包含speech_text与逻辑voice_profile；模型按当前会话允许音色获得可空voice结构，选语音时parts为空且不混合引用，选文字时保留有序parts。普通无语音配置的会话结构保持现有行为。额外音色说明和schema进入现有上下文token预算。
+
+TextRuntime在原deadline内调用VoiceDelivery.deliver(candidate, reply, outgoing_id)，缺执行器明确voice_unavailable，绝不把正文当文字发出。该接口的生产实现须拥有持久合成生命周期和费用预留，并最终调用DeliveryService；当前仅回放替身，下一步从真实本地PG与合成供应商边界逐条验证这些约束。

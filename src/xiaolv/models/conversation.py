@@ -2,7 +2,7 @@
 
 import asyncio
 import json
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from datetime import datetime
 from importlib.resources import files
 from typing import Any, Literal, Protocol
@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from xiaolv.domain.bot_profile import BotProfile
 from xiaolv.domain.context_policy import ContextPolicy
 from xiaolv.domain.text_reply import TextPart, TextReply, validate_text_parts
+from xiaolv.domain.voice_reply import VoiceReply
 from xiaolv.models.context import ContextAssembler
 from xiaolv.orchestration.text_runtime import ConversationCandidate
 
@@ -56,6 +57,17 @@ class _OrderedReply(BaseModel):
     reply_to: str | None
 
 
+class _VoiceIntent(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid", hide_input_in_errors=True)
+    speech_text: str = Field(min_length=1)
+    voice_profile: str = Field(min_length=1)
+
+
+class _MediaReply(_OrderedReply):
+    parts: list[_Part] = Field(max_length=32)
+    voice: _VoiceIntent | None
+
+
 class ChatCompletionsModel:
     def __init__(
         self,
@@ -67,6 +79,7 @@ class ChatCompletionsModel:
         mention_conversations: Collection[str] = (),
         quote_conversations: Collection[str] = (),
         ordered_conversations: Collection[str] = (),
+        voice_profiles: Mapping[str, tuple[str, ...]] | None = None,
     ) -> None:
         if type(max_reply_chars) is not int or max_reply_chars <= 0:
             raise ValueError("invalid reply length")
@@ -77,6 +90,7 @@ class ChatCompletionsModel:
         self._mention_conversations = frozenset(mention_conversations)
         self._quote_conversations = frozenset(quote_conversations)
         self._ordered_conversations = frozenset(ordered_conversations)
+        self._voice_profiles = dict(voice_profiles or {})
 
     def _instructions(self, stage: str, candidate: ConversationCandidate) -> str:
         template = files("xiaolv.prompts").joinpath(stage + ".txt").read_text(encoding="utf-8")
@@ -109,12 +123,15 @@ class ChatCompletionsModel:
         )
         return _Decision.model_validate_json(result).action
 
-    async def reply(self, candidate: ConversationCandidate) -> str | TextReply:
+    async def reply(self, candidate: ConversationCandidate) -> str | TextReply | VoiceReply:
         enabled = candidate.conversation_id in self._mention_conversations
         quotes = candidate.conversation_id in self._quote_conversations
         ordered = candidate.conversation_id in self._ordered_conversations
+        voices = self._voice_profiles.get(candidate.conversation_id, ())
         schema_type = (
-            _OrderedReply
+            _MediaReply
+            if voices
+            else _OrderedReply
             if ordered
             else _AddressedReply
             if enabled and quotes
@@ -125,6 +142,11 @@ class ChatCompletionsModel:
             else _Reply
         )
         instructions = self._instructions("reply", candidate)
+        if voices:
+            instructions += "\n" + files("xiaolv.prompts").joinpath("voice.txt").read_text(
+                encoding="utf-8"
+            )
+            instructions += "\n允许的逻辑音色：" + json.dumps(voices, ensure_ascii=False)
         schema = schema_type.model_json_schema()
         context = await asyncio.to_thread(
             self._assembler.assemble, candidate, instructions, schema, "reply", enabled
@@ -135,9 +157,19 @@ class ChatCompletionsModel:
             schema=schema,
             expires_at=candidate.expires_at,
         )
-        if not enabled and not quotes and not ordered:
+        if not enabled and not quotes and not ordered and not voices:
             return _Reply.model_validate_json(result).text
         reply = schema_type.model_validate_json(result)
+        if isinstance(reply, _MediaReply) and reply.voice is not None:
+            if reply.parts or reply.reply_to is not None:
+                raise ValueError("voice cannot mix with text or quote")
+            if reply.voice.voice_profile not in voices or not reply.voice.speech_text.strip():
+                raise ValueError("voice intent is unavailable")
+            if len(reply.voice.speech_text) > self._max_reply_chars:
+                raise ValueError("voice text exceeds reply limit")
+            return VoiceReply(reply.voice.speech_text, reply.voice.voice_profile)
+        if isinstance(reply, _MediaReply) and not reply.parts:
+            raise ValueError("text reply must include parts")
         visible = json.loads(context)["messages"]
         mentions: tuple[str, ...] = ()
         if isinstance(reply, _MentionReply):

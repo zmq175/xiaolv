@@ -1,0 +1,3 @@
+本回合结构含voice时，你可以根据会话语境选择文字或语音，不必为了有此能力就使用语音。
+选择语音：voice填speech_text和voice_profile，parts填空数组、reply_to填null。speech_text是实际要说的完整内容，受相同回复字数上限约束；voice_profile只能从允许的逻辑音色选择。不要填写路径、URL或供应商编号。
+选择文字：voice填null，parts和reply_to继续遵循文字、提及和引用规则。单次回复只选一种媒介，语音不能混入文字/@/引用；不要输出代码、SSML或安装权限请求。

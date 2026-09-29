@@ -16,6 +16,7 @@ from xiaolv.domain.chat_event import ConversationContext
 from xiaolv.domain.context_policy import ContextOverflow
 from xiaolv.domain.model_budget import BudgetDenied
 from xiaolv.domain.text_reply import TextPart, TextReply, validate_text_parts
+from xiaolv.domain.voice_reply import VoiceReply
 
 
 @dataclass(frozen=True)
@@ -33,7 +34,20 @@ class ConversationCandidate:
 class ConversationModel(Protocol):
     async def decide(self, candidate: ConversationCandidate) -> Literal["respond", "silence"]: ...
 
-    async def reply(self, candidate: ConversationCandidate) -> str | TextReply: ...
+    async def reply(self, candidate: ConversationCandidate) -> str | TextReply | VoiceReply: ...
+
+
+class VoiceDelivery(Protocol):
+    """Voice execution boundary; implementations own durable synthesis and guarded delivery.
+
+    Must retain outgoing_id, conversation scope, epoch and original deadline,
+    check authorization after synthesis, and use DeliveryService for platform IO.
+    No production implementation is wired until accounting and artifacts exist.
+    """
+
+    async def deliver(
+        self, candidate: ConversationCandidate, reply: VoiceReply, outgoing_id: str
+    ) -> str: ...
 
 
 class _State(TypedDict, total=False):
@@ -43,6 +57,7 @@ class _State(TypedDict, total=False):
     mentions: tuple[str, ...]
     reply_to: str | None
     parts: tuple[TextPart, ...]
+    voice: VoiceReply
 
 
 class TextRuntime:
@@ -53,9 +68,11 @@ class TextRuntime:
         clock: Callable[[], datetime],
         max_chars: int = 200,
         profile_loader: Callable[[], Awaitable[ProfileSnapshot]] | None = None,
+        voice_delivery: VoiceDelivery | None = None,
     ) -> None:
         self._locks: dict[str, asyncio.Lock] = {}
         self._model = model
+        self._voice_delivery = voice_delivery
         self._profile_loader = profile_loader
         self._delivery = delivery
         self._clock = clock
@@ -120,6 +137,31 @@ class TextRuntime:
                         },
                     )
                 state = await self._graph.ainvoke({"candidate": candidate})
+                if "voice" in state:
+                    voice = state["voice"]
+                    if (
+                        not voice.speech_text.strip()
+                        or len(voice.speech_text) > self._max_chars
+                        or not voice.voice_profile.strip()
+                    ):
+                        return "invalid_reply"
+                    if self._clock() >= candidate.expires_at:
+                        return "expired"
+                    if self._voice_delivery is None:
+                        return "voice_unavailable"
+                    await self._delivery.require_permission(candidate.conversation_id)
+                    try:
+                        return await self._voice_delivery.deliver(
+                            candidate, state["voice"], outgoing_id
+                        )
+                    except (PermissionDenied, BudgetDenied):
+                        raise
+                    except TimeoutError:
+                        if deadline.expired():
+                            raise
+                        return "voice_error"
+                    except Exception:  # noqa: BLE001 - stable outcome, never provider error details
+                        return "voice_error"
         except PermissionDenied as exc:
             return exc.reason
         except ContextOverflow:
@@ -158,6 +200,8 @@ class TextRuntime:
     async def _reply(self, state: _State) -> _State:
         await self._delivery.require_permission(state["candidate"].conversation_id)
         reply = await self._model.reply(state["candidate"])
+        if isinstance(reply, VoiceReply):
+            return {"voice": reply}
         if isinstance(reply, str):
             return {"text": reply, "mentions": ()}
         candidate = state["candidate"]
