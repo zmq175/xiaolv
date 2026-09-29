@@ -160,9 +160,11 @@ async def test_heartbeats_and_empty_chunks_do_not_extend_first_content_wait(pref
 
     class Slow(httpx.AsyncByteStream):
         closed = False
+        started = False
 
         async def __aiter__(self):
-            for _ in range(10):
+            self.started = True
+            for _ in range(100):
                 yield prefix
                 await asyncio.sleep(0.01)
             yield stream_json({"action": "silence"}).content
@@ -180,11 +182,12 @@ async def test_heartbeats_and_empty_chunks_do_not_extend_first_content_wait(pref
         api_key="synthetic",
         model="synthetic",
         transport=httpx.MockTransport(serve),
-        first_token_seconds=0.03,
+        first_token_seconds=0.2,
     ) as gateway:
         runner, platform = runtime(gateway)
-        assert await asyncio.wait_for(runner.run(candidate()), 0.5) == "model_error"
+        assert await asyncio.wait_for(runner.run(candidate()), 1.5) == "model_error"
         assert platform.sent == []
+        assert stream.started
         assert stream.closed
 
 

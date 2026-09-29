@@ -145,6 +145,7 @@ async def run_live(
                             key for key, target in routes.items() if target.kind == "group"
                         ],
                         quote_conversations=list(routes),
+                        ordered_conversations=list(routes),
                     ),
                     delivery,
                     clock,

@@ -6,10 +6,10 @@ from datetime import datetime
 from importlib.resources import files
 from typing import Any, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from xiaolv.domain.bot_profile import BotProfile
-from xiaolv.domain.text_reply import TextReply
+from xiaolv.domain.text_reply import TextPart, TextReply, validate_text_parts
 from xiaolv.orchestration.text_runtime import ConversationCandidate
 
 
@@ -41,6 +41,18 @@ class _AddressedReply(_MentionReply, _QuoteReply):
     pass
 
 
+class _Part(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid", hide_input_in_errors=True)
+    kind: Literal["text", "mention"]
+    value: str
+
+
+class _OrderedReply(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid", hide_input_in_errors=True)
+    parts: list[_Part] = Field(min_length=1, max_length=32)
+    reply_to: str | None
+
+
 class ChatCompletionsModel:
     def __init__(
         self,
@@ -50,6 +62,7 @@ class ChatCompletionsModel:
         max_reply_chars: int = 200,
         mention_conversations: Collection[str] = (),
         quote_conversations: Collection[str] = (),
+        ordered_conversations: Collection[str] = (),
     ) -> None:
         if type(max_reply_chars) is not int or max_reply_chars <= 0:
             raise ValueError("invalid reply length")
@@ -58,6 +71,7 @@ class ChatCompletionsModel:
         self._max_reply_chars = max_reply_chars
         self._mention_conversations = frozenset(mention_conversations)
         self._quote_conversations = frozenset(quote_conversations)
+        self._ordered_conversations = frozenset(ordered_conversations)
 
     def _instructions(self, stage: str) -> str:
         template = files("xiaolv.prompts").joinpath(stage + ".txt").read_text(encoding="utf-8")
@@ -81,8 +95,11 @@ class ChatCompletionsModel:
         context = self._context(candidate)
         enabled = candidate.conversation_id in self._mention_conversations
         quotes = candidate.conversation_id in self._quote_conversations
+        ordered = candidate.conversation_id in self._ordered_conversations
         schema_type = (
-            _AddressedReply
+            _OrderedReply
+            if ordered
+            else _AddressedReply
             if enabled and quotes
             else _MentionReply
             if enabled
@@ -96,7 +113,7 @@ class ChatCompletionsModel:
             schema=schema_type.model_json_schema(),
             expires_at=candidate.expires_at,
         )
-        if not enabled and not quotes:
+        if not enabled and not quotes and not ordered:
             return _Reply.model_validate_json(result).text
         reply = schema_type.model_validate_json(result)
         visible = json.loads(context)["messages"]
@@ -105,7 +122,9 @@ class ChatCompletionsModel:
             members = {item["member_ref"]: item["account"] for item in visible}
             mentions = tuple(dict.fromkeys(members[ref] for ref in reply.mentions))
         reply_to = None
-        if isinstance(reply, _QuoteReply) and reply.reply_to is not None:
+        if isinstance(reply, (_QuoteReply, _OrderedReply)) and reply.reply_to is not None:
+            if not quotes:
+                raise ValueError("quote is unavailable in this conversation")
             available = {item["message_ref"] for item in visible}
             if reply.reply_to not in available:
                 raise ValueError("quote reference is not visible")
@@ -116,6 +135,16 @@ class ChatCompletionsModel:
             reply_to = events[reply.reply_to].message_id
             if sum(item.message_id == reply_to for item in candidate.context.messages) != 1:
                 raise ValueError("quote reference is ambiguous")
+        if isinstance(reply, _OrderedReply):
+            members = {item["member_ref"]: item["account"] for item in visible} if enabled else {}
+            parts = tuple(
+                TextPart(part.kind, members[part.value] if part.kind == "mention" else part.value)
+                for part in reply.parts
+            )
+            body = "".join(part.value for part in parts if part.kind == "text")
+            mentions = tuple(part.value for part in parts if part.kind == "mention")
+            validate_text_parts(body, mentions, parts)
+            return TextReply(body, mentions, reply_to, parts)
         return TextReply(reply.text, mentions, reply_to)
 
     def _context(self, candidate: ConversationCandidate) -> str:

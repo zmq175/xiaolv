@@ -40,6 +40,7 @@ class Services:
         self.reply_to = None
         self.message_queries = []
         self.drop_quote = False
+        self.parts = None
 
     async def onebot(self, ws):
         self.connection = ws
@@ -134,6 +135,16 @@ class Services:
                 value["mentions"] = self.mentions
             if "action" not in properties and (self.reply_to or "reply_to" in properties):
                 value["reply_to"] = self.reply_to
+            if "action" not in properties and (self.parts is not None or "parts" in properties):
+                value = {
+                    "parts": self.parts
+                    if self.parts is not None
+                    else [
+                        *({"kind": "mention", "value": ref} for ref in self.mentions),
+                        {"kind": "text", "value": "我觉得先试一下。"},
+                    ],
+                    "reply_to": self.reply_to,
+                }
             chunks = [
                 {
                     "choices": [
@@ -768,6 +779,77 @@ async def test_live_quota_drops_next_reply_instead_of_queueing_it(database_url, 
         assert summary.outcomes == {"confirmed": 1, "rate_limited": 1}
         assert len(services.sent) == 1
         assert len(services.model_requests) == 2
+    finally:
+        stop.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_online_model_places_mention_between_text_parts(database_url, services):
+    from xiaolv.live import LiveSummary
+
+    services.parts = [
+        {"kind": "text", "value": "这件事问 "},
+        {"kind": "mention", "value": "member_1"},
+        {"kind": "text", "value": " 比较清楚"},
+    ]
+    services.reply_to = "message_1"
+    stats = LiveSummary()
+    stop = asyncio.Event()
+    task = asyncio.create_task(run_live(settings(database_url, services), stop, statistics=stats))
+    try:
+        await until(lambda: bool(stats.outcomes), task)
+        assert stats.outcomes == {"confirmed": 1}
+        assert services.sent[0]["message"] == [
+            {"type": "reply", "data": {"id": "1"}},
+            {"type": "text", "data": {"text": "这件事问 "}},
+            {"type": "at", "data": {"qq": "10001"}},
+            {"type": "text", "data": {"text": " 比较清楚"}},
+        ]
+        assert services.member_queries == [{"group_id": 20000, "no_cache": True}]
+    finally:
+        stop.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize(
+    "parts,expected",
+    [
+        (
+            [{"kind": "text", "value": "hi"}, {"kind": "mention", "value": "qq:10001"}],
+            "model_error",
+        ),
+        (
+            [{"kind": "text", "value": "hi"}, {"kind": "mention", "value": "member_999"}],
+            "model_error",
+        ),
+        (
+            [
+                {"kind": "text", "value": "hi"},
+                {"kind": "mention", "value": "member_1"},
+                {"kind": "mention", "value": "member_1"},
+            ],
+            "model_error",
+        ),
+        ([{"kind": "image", "value": "https://example.invalid/image"}], "model_error"),
+        ([], "model_error"),
+        ([{"kind": "text", "value": "长" * 201}], "invalid_reply"),
+        ([{"kind": "text", "value": "字"}] * 33, "model_error"),
+    ],
+)
+async def test_online_ordered_reply_rejects_invalid_intent(database_url, services, parts, expected):
+    from xiaolv.live import LiveSummary
+
+    services.parts = parts
+    stats = LiveSummary()
+    stop = asyncio.Event()
+    task = asyncio.create_task(run_live(settings(database_url, services), stop, statistics=stats))
+    try:
+        await until(lambda: bool(stats.outcomes), task)
+        assert stats.outcomes == {expected: 1}
+        assert services.sent == []
+        assert services.member_queries == []
     finally:
         stop.set()
         task.cancel()

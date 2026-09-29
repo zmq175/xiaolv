@@ -35,5 +35,6 @@
 | [026 调用前配额预判](026-quota-preflight/spec.md) | Verified | 已限流回合跳过模型、只读预判不预留、最终认领防并发穿透 |
 | [027 共享模型并发](027-shared-model-capacity/spec.md) | Verified | PG共享名额、等待不计费、取消释放、配置冲突与真实SIGKILL恢复 |
 | [028 有序文字发送](028-ordered-text/spec.md) | Verified | 已解析文字/@顺序、独立引用、结构校验、回放与PG重启幂等；模型生成接线待完成 |
+| [029 模型有序回复](029-model-ordered-text/spec.md) | Verified | 模型parts解析、在线文字/@/引用顺序、非法意图零发送；真实供应商与QQ待验收 |
 
 Verified仅表示该规格明示范围通过验证，不代表完整首版或真实QQ上线验收。每个规格包含spec.md、plan.md、evidence.md。开发流程见CONTRIBUTING.md。
