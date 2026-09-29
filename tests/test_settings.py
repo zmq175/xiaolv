@@ -265,3 +265,21 @@ def test_invalid_delivery_policy_is_rejected(policy):
 
     with pytest.raises(ConfigError):
         load_settings({"XIAOLV_DELIVERY_POLICY": policy})
+
+
+def test_context_budget_configuration_is_separate_from_history_count():
+    from xiaolv.settings import ConfigError
+
+    settings = load_settings(
+        {
+            "XIAOLV_CONTEXT_POLICY": '{"history_messages":40,"decision_tokens":1500,"reply_tokens":2500,"encoding":"o200k_base"}'
+        }
+    )
+    assert settings.context_policy.history_messages == 40
+    assert settings.context_policy.decision_tokens == 1500
+    assert settings.context_policy.reply_tokens == 2500
+    assert settings.context_policy.encoding == "o200k_base"
+    with pytest.raises(ConfigError, match="context_policy"):
+        load_settings({"XIAOLV_CONTEXT_POLICY": '{"history_messages":501}'})
+    with pytest.raises(ConfigError, match="context_policy"):
+        load_settings({"XIAOLV_CONTEXT_POLICY": '{"window_tokens":1024,"safety_tokens":900}'})

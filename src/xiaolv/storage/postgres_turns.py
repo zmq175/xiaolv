@@ -77,8 +77,11 @@ async def offer_candidate(
 
 
 class PostgresTurns:
-    def __init__(self, engine: AsyncEngine) -> None:
+    def __init__(self, engine: AsyncEngine, history_messages: int = 100) -> None:
+        if not 1 <= history_messages <= 500:
+            raise ValueError("invalid history limit")
         self._engine = engine
+        self._history_messages = history_messages
 
     async def status(self, turn_id: str) -> str | None:
         async with self._engine.connect() as connection:
@@ -174,18 +177,46 @@ class PostgresTurns:
             )
             history = await connection.execute(
                 text("""
-                SELECT payload FROM app.messages WHERE conversation_id = :conversation
-                ORDER BY occurred_at DESC, sequence DESC LIMIT 30
+                WITH recent AS (
+                    SELECT payload, occurred_at, sequence, message_id FROM app.messages
+                    WHERE conversation_id = :conversation
+                    ORDER BY occurred_at DESC, sequence DESC LIMIT :history_limit
+                )
+                SELECT payload, occurred_at, sequence FROM recent
+                UNION ALL
+                SELECT payload, occurred_at, sequence FROM app.messages
+                WHERE conversation_id = :conversation AND message_id = ANY(:required)
+                  AND message_id NOT IN (SELECT message_id FROM recent)
+                ORDER BY occurred_at ASC, sequence ASC
             """),
-                {"conversation": event.conversation_id},
+                {
+                    "conversation": event.conversation_id,
+                    "history_limit": self._history_messages,
+                    "required": [
+                        event.message_id,
+                        *list(
+                            dict.fromkeys(
+                                part.reference
+                                for part in event.parts
+                                if part.kind == "reply" and part.reference
+                            )
+                        )[:8],
+                    ],
+                },
             )
             payloads: list[object] = list(history.scalars().all())
             context = ConversationContext(
                 row["revision"],
-                tuple(_CODEC.validate_python(payload) for payload in reversed(payloads)),
+                tuple(_CODEC.validate_python(payload) for payload in payloads),
             )
             return ConversationCandidate(
-                event.conversation_id, turn_id, event.text, row["expires_at"], epoch, context
+                event.conversation_id,
+                turn_id,
+                event.text,
+                row["expires_at"],
+                epoch,
+                context,
+                source_message_id=event.message_id,
             )
 
     async def finish(self, candidate: ConversationCandidate, status: str) -> None:

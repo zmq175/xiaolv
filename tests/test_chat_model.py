@@ -293,7 +293,7 @@ async def test_oversized_unterminated_sse_line_is_rejected_before_consuming_whol
         assert platform.sent == []
 
 
-async def test_large_context_is_bounded_and_contains_recent_scoped_messages():
+async def test_oversized_target_is_rejected_instead_of_silently_truncated():
     from dataclasses import replace
 
     from xiaolv.domain.chat_event import ChatEvent, ConversationContext
@@ -323,12 +323,8 @@ async def test_large_context_is_bounded_and_contains_recent_scoped_messages():
         transport=httpx.MockTransport(serve),
     ) as gateway:
         runner, _ = runtime(gateway)
-        assert await runner.run(event) == "silence"
-    context = requests[0]["messages"][1]["content"]
-    assert len(context) <= 12000
-    assert "最近一句" in context
-    assert "长" * 20 not in requests[0]["messages"][0]["content"]
-    assert json.loads(context)["target_truncated"] is True
+        assert await runner.run(event) == "context_overflow"
+    assert requests == []
 
 
 @pytest.mark.parametrize(

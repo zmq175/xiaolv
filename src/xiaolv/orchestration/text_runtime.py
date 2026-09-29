@@ -12,6 +12,7 @@ from langgraph.graph import END, START, StateGraph
 from xiaolv.application.delivery import DeliveryRequest, DeliveryService
 from xiaolv.domain.bot_profile import ProfileSnapshot
 from xiaolv.domain.chat_event import ConversationContext
+from xiaolv.domain.context_policy import ContextOverflow
 from xiaolv.domain.model_budget import BudgetDenied
 from xiaolv.domain.text_reply import TextPart, TextReply, validate_text_parts
 
@@ -25,6 +26,7 @@ class ConversationCandidate:
     generation_epoch: int
     context: ConversationContext = field(default_factory=lambda: ConversationContext(0, ()))
     profile_snapshot: ProfileSnapshot | None = None
+    source_message_id: str | None = None
 
 
 class ConversationModel(Protocol):
@@ -117,6 +119,8 @@ class TextRuntime:
                         },
                     )
                 state = await self._graph.ainvoke({"candidate": candidate})
+        except ContextOverflow:
+            return "context_overflow"
         except BudgetDenied:
             return "budget_denied"
         except TimeoutError:

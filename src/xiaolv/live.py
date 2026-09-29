@@ -17,6 +17,7 @@ from xiaolv.domain.model_budget import BudgetPolicy
 from xiaolv.domain.model_usage import ModelCallReport
 from xiaolv.models.chat_completions import ChatCompletionsGateway
 from xiaolv.models.conversation import ChatCompletionsModel
+from xiaolv.models.tokenizer import load_tokenizer
 from xiaolv.orchestration.text_runtime import TextRuntime
 from xiaolv.platforms.onebot import OneBotPreparation, OneBotSender, QQTarget
 from xiaolv.platforms.onebot_ingress import IngressError, OneBotIngress
@@ -55,6 +56,10 @@ async def run_live(
 ) -> LiveSummary:
     if settings.mode != "live":
         raise ConfigError("live mode is required")
+    try:
+        await asyncio.to_thread(load_tokenizer, settings.context_policy.encoding)
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from None
     self_id = _required(settings.qq_self_id)
     policy = BudgetPolicy(
         "external",
@@ -133,11 +138,12 @@ async def run_live(
                 clock,
             )
             worker = ChatWorker(
-                PostgresTurns(engine),
+                PostgresTurns(engine, history_messages=settings.context_policy.history_messages),
                 TextRuntime(
                     ChatCompletionsModel(
                         gateway,
                         profile=settings.bot_profile,
+                        context_policy=settings.context_policy,
                         max_reply_chars=settings.max_reply_chars,
                         mention_conversations=[
                             key for key, target in routes.items() if target.kind == "group"

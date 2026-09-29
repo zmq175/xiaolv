@@ -61,3 +61,15 @@ SIGINT/SIGTERM 停止新接收和新认领，给活跃 worker 最多 5 秒完成
 `XIAOLV_MODEL_CONCURRENCY` 同时约束每个进程和数据库内共享的 `chat-model` 名额池，默认 2。所有实例必须一致；池首次创建后容量持久保存，改环境变量不会静默改池容量，不一致会拒绝启动。动态调容管理命令尚未实现。
 
 名额等待计入回合期限，获取后才预留模型费用。正常结束/取消释放；SIGKILL 遗留名额到原回合期限后 5 秒才可回收。释放失败同样保守等待过期。这里控制应用准入，无法保证供应商因 HTTP 取消立即停止远端计算。迁移 0008 的降级会删除池和租约，必须先停止所有调用，不作为在线扩容方式。
+
+## 文字上下文预算
+
+SPEC-037使用现成tiktoken本地计数。安装后、启动服务前显式预热所用编码；预热需要访问官方资源地址，在线聊天路径不会自动下载缺失资源。运行用户必须能读取同一个缓存目录，生产环境可设TIKTOKEN_CACHE_DIR指向持久目录。缺失或校验失败会在连接QQ前报配置错误。
+
+```sh
+export TIKTOKEN_CACHE_DIR=/var/lib/xiaolv/tiktoken
+uv run python -c 'import tiktoken; tiktoken.get_encoding("cl100k_base"); tiktoken.get_encoding("o200k_base")'
+export XIAOLV_CONTEXT_POLICY='{"encoding":"cl100k_base","window_tokens":16384,"decision_tokens":4096,"reply_tokens":8192,"history_messages":100}'
+```
+
+窗口大小和编码须按实际供应商调整，以上不是供应商能力声明。输入预算包含指令、人设、schema和上下文，输出预留固定512与当前API上限一致，安全余量默认512。记录context_assembled统计（不含原文）。第三方模型分词和API包装可能不同，需对账真实usage；摘要、工具、多模态预算尚未接入。

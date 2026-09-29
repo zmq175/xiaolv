@@ -888,3 +888,52 @@ async def test_online_turn_uses_admin_published_persona(database_url, services):
         stop.set()
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_live_context_policy_bounds_tokens_and_reads_more_than_thirty_messages(
+    database_url, services
+):
+    import tiktoken
+
+    services.frames = [message(message_id=i, content=f"第{i}条合成短消息") for i in range(1, 42)]
+    configured = settings(
+        database_url,
+        services,
+        XIAOLV_CONTEXT_POLICY='{"history_messages":40,"decision_tokens":12000,"reply_tokens":12000}',
+    )
+    stop = asyncio.Event()
+    task = asyncio.create_task(run_live(configured, stop))
+    try:
+        await asyncio.wait_for(services.delivered.wait(), 5)
+        stop.set()
+        await asyncio.wait_for(task, 6)
+        encoding = tiktoken.get_encoding("cl100k_base")
+        for request in services.model_requests:
+            context = json.loads(request["messages"][1]["content"])
+            assert len(context["messages"]) == 40
+            assert context["messages"][-1]["text"] == "第41条合成短消息"
+            texts = [item["content"] for item in request["messages"]]
+            texts.append(
+                json.dumps(request["response_format"]["json_schema"]["schema"], ensure_ascii=False)
+            )
+            assert (
+                sum(len(encoding.encode(text, disallowed_special=())) for text in texts) + 128
+                <= 12000
+            )
+        assert len(services.model_requests) == 2
+    finally:
+        stop.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_missing_tokenizer_assets_fail_before_platform_connection(
+    database_url, services, monkeypatch, tmp_path
+):
+    from xiaolv.settings import ConfigError
+
+    monkeypatch.setenv("TIKTOKEN_CACHE_DIR", str(tmp_path))
+    with pytest.raises(ConfigError, match="tokenizer assets"):
+        await asyncio.wait_for(run_live(settings(database_url, services), asyncio.Event()), 3)
+    assert services.model_requests == []
+    assert services.sent == []

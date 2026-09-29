@@ -28,6 +28,8 @@ jobs:
         with:
           version: "0.12.7"
       - run: uv sync --locked
+      - name: Provision local tokenizer assets
+        run: uv run python -c 'import tiktoken; tiktoken.get_encoding("cl100k_base"); tiktoken.get_encoding("o200k_base")'
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "24"

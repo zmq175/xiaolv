@@ -1,5 +1,6 @@
 """Conversation behavior over a replaceable structured generation boundary."""
 
+import asyncio
 import json
 from collections.abc import Collection
 from datetime import datetime
@@ -9,7 +10,9 @@ from typing import Any, Literal, Protocol
 from pydantic import BaseModel, ConfigDict, Field
 
 from xiaolv.domain.bot_profile import BotProfile
+from xiaolv.domain.context_policy import ContextPolicy
 from xiaolv.domain.text_reply import TextPart, TextReply, validate_text_parts
+from xiaolv.models.context import ContextAssembler
 from xiaolv.orchestration.text_runtime import ConversationCandidate
 
 
@@ -60,6 +63,7 @@ class ChatCompletionsModel:
         *,
         profile: BotProfile | None = None,
         max_reply_chars: int = 200,
+        context_policy: ContextPolicy | None = None,
         mention_conversations: Collection[str] = (),
         quote_conversations: Collection[str] = (),
         ordered_conversations: Collection[str] = (),
@@ -67,6 +71,7 @@ class ChatCompletionsModel:
         if type(max_reply_chars) is not int or max_reply_chars <= 0:
             raise ValueError("invalid reply length")
         self._generator = generator
+        self._assembler = ContextAssembler(context_policy or ContextPolicy())
         self._profile = profile if profile is not None else BotProfile()
         self._max_reply_chars = max_reply_chars
         self._mention_conversations = frozenset(mention_conversations)
@@ -86,16 +91,25 @@ class ChatCompletionsModel:
         )
 
     async def decide(self, candidate: ConversationCandidate) -> Literal["respond", "silence"]:
+        instructions = self._instructions("participation", candidate)
+        schema = _Decision.model_json_schema()
+        context = await asyncio.to_thread(
+            self._assembler.assemble,
+            candidate,
+            instructions,
+            schema,
+            "participation",
+            candidate.conversation_id in self._mention_conversations,
+        )
         result = await self._generator.generate(
-            instructions=self._instructions("participation", candidate),
-            context=self._context(candidate),
-            schema=_Decision.model_json_schema(),
+            instructions=instructions,
+            context=context,
+            schema=schema,
             expires_at=candidate.expires_at,
         )
         return _Decision.model_validate_json(result).action
 
     async def reply(self, candidate: ConversationCandidate) -> str | TextReply:
-        context = self._context(candidate)
         enabled = candidate.conversation_id in self._mention_conversations
         quotes = candidate.conversation_id in self._quote_conversations
         ordered = candidate.conversation_id in self._ordered_conversations
@@ -110,10 +124,15 @@ class ChatCompletionsModel:
             if quotes
             else _Reply
         )
+        instructions = self._instructions("reply", candidate)
+        schema = schema_type.model_json_schema()
+        context = await asyncio.to_thread(
+            self._assembler.assemble, candidate, instructions, schema, "reply", enabled
+        )
         result = await self._generator.generate(
-            instructions=self._instructions("reply", candidate),
+            instructions=instructions,
             context=context,
-            schema=schema_type.model_json_schema(),
+            schema=schema,
             expires_at=candidate.expires_at,
         )
         if not enabled and not quotes and not ordered:
@@ -133,7 +152,7 @@ class ChatCompletionsModel:
                 raise ValueError("quote reference is not visible")
             events = {
                 f"message_{index}": item
-                for index, item in enumerate(reversed(candidate.context.messages[-30:]), 1)
+                for index, item in enumerate(reversed(candidate.context.messages), 1)
             }
             reply_to = events[reply.reply_to].message_id
             if sum(item.message_id == reply_to for item in candidate.context.messages) != 1:
@@ -149,65 +168,3 @@ class ChatCompletionsModel:
             validate_text_parts(body, mentions, parts)
             return TextReply(body, mentions, reply_to, parts)
         return TextReply(reply.text, mentions, reply_to)
-
-    def _context(self, candidate: ConversationCandidate) -> str:
-        if any(
-            item.conversation_id != candidate.conversation_id for item in candidate.context.messages
-        ):
-            raise ValueError("conversation context scope mismatch")
-        messages: list[dict[str, object]] = []
-        events = {
-            f"message_{index}": item
-            for index, item in enumerate(reversed(candidate.context.messages[-30:]), 1)
-        }
-        payload = {
-            "target_text": candidate.text[:1000],
-            "target_truncated": len(candidate.text) > 1000,
-            "messages": messages,
-        }
-        for index, item in enumerate(reversed(candidate.context.messages[-30:]), 1):
-            messages.insert(
-                0,
-                {
-                    "message_ref": f"message_{index}",
-                    "account": item.sender_account_id,
-                    "name": item.display_name[:128],
-                    "text": item.text[:1000],
-                    "truncated": len(item.text) > 1000,
-                },
-            )
-            if candidate.conversation_id in self._mention_conversations:
-                messages[0]["member_ref"] = f"member_{index}"
-            if len(json.dumps(payload, ensure_ascii=False)) > 12000:
-                messages.pop(0)
-                break
-        counts: dict[str, int] = {}
-        for event in candidate.context.messages:
-            counts[event.message_id] = counts.get(event.message_id, 0) + 1
-        while True:
-            by_id = {
-                events[str(row["message_ref"])].message_id: row["message_ref"] for row in messages
-            }
-            for row in messages:
-                row["replies"] = [
-                    {
-                        "status": (
-                            "ambiguous"
-                            if counts.get(part.reference or "", 0) > 1
-                            else "resolved"
-                            if part.reference in by_id
-                            else "missing"
-                        ),
-                        "target_ref": (
-                            by_id.get(part.reference or "")
-                            if counts.get(part.reference or "", 0) == 1
-                            else None
-                        ),
-                    }
-                    for part in events[str(row["message_ref"])].parts
-                    if part.kind == "reply"
-                ]
-            serialized = json.dumps(payload, ensure_ascii=False)
-            if len(serialized) <= 12000 or not messages:
-                return serialized
-            messages.pop(0)

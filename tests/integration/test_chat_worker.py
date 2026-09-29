@@ -414,3 +414,39 @@ async def test_late_old_worker_cannot_release_new_workers_lease(database_url):
         new_model.release.set()
         await asyncio.gather(*tasks, return_exceptions=True)
         await engine.dispose()
+
+
+async def test_configured_recent_history_retains_same_conversation_quote_outside_window(
+    database_url,
+):
+    engine = create_async_engine(database_url, hide_parameters=True)
+    try:
+        incoming, _, model, platform = setup(engine)
+        await incoming.receive(frame(message_id=0, group_id=20001, content="其他群原文不能混入"))
+        await incoming.receive(frame(message_id=0, content="本群被引用的旧原文"))
+        for index in range(1, 61):
+            await incoming.receive(frame(message_id=index, content=f"普通消息{index}"))
+        await incoming.receive(
+            frame(
+                message_id=61,
+                message=[
+                    {"type": "reply", "data": {"id": "0"}},
+                    {"type": "text", "data": {"text": "怎么看原文？"}},
+                ],
+            )
+        )
+        worker = ChatWorker(
+            PostgresTurns(engine, history_messages=40),
+            TextRuntime(
+                model, DeliveryService(platform, ledger=PostgresDeliveryLedger(engine)), clock
+            ),
+        )
+        assert await worker.run_once() == "confirmed"
+        selected = model.candidates[0]
+        assert selected.source_message_id == "61"
+        assert len(selected.context.messages) == 41
+        assert selected.context.messages[0].text == "本群被引用的旧原文"
+        assert all(item.conversation_id == CONVERSATION for item in selected.context.messages)
+        assert selected.context.messages[-1].message_id == "61"
+    finally:
+        await engine.dispose()

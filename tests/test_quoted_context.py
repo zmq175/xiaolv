@@ -71,7 +71,7 @@ async def test_duplicate_message_ids_do_not_silently_choose_one_quote_target():
     assert context["messages"][-1]["replies"] == [{"status": "ambiguous", "target_ref": None}]
 
 
-async def test_quote_metadata_cannot_exceed_context_budget_or_point_to_trimmed_messages():
+async def test_repeated_quote_metadata_preserves_required_original():
     from dataclasses import replace
 
     messages = [message("original", "旧消息")]
@@ -81,16 +81,13 @@ async def test_quote_metadata_cannot_exceed_context_budget_or_point_to_trimmed_m
     )
     context = await observe(messages)
     assert context["messages"]
-    assert len(json.dumps(context, ensure_ascii=False)) <= 12000
-    assert len(context["messages"]) <= 30
-    assert all(
-        reply == {"status": "missing", "target_ref": None}
-        for row in context["messages"]
-        for reply in row["replies"]
-    )
+    assert context["messages"][0]["text"] == "旧消息"
+    assert context["messages"][-1]["replies"] == [
+        {"status": "resolved", "target_ref": "message_31"}
+    ]
 
 
-async def test_target_removed_by_metadata_budget_becomes_missing():
+async def test_duplicate_quote_parts_do_not_displace_the_original():
     from dataclasses import replace
 
     original = message("original", "旧" * 1000)
@@ -99,8 +96,9 @@ async def test_target_removed_by_metadata_budget_becomes_missing():
         parts=tuple(MessagePart("reply", reference="original") for _ in range(200)),
     )
     context = await observe([original, latest])
-    assert len(context["messages"]) == 1
-    assert context["messages"][0]["replies"] == [{"status": "missing", "target_ref": None}] * 200
+    assert len(context["messages"]) == 2
+    assert context["messages"][0]["text"] == original.text
+    assert context["messages"][-1]["replies"] == [{"status": "resolved", "target_ref": "message_2"}]
 
 
 async def test_unavailable_original_is_not_invented():
