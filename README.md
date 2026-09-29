@@ -2,7 +2,7 @@
 
 从零构建的自然群聊 Agent。首个 IM 接入为 QQ / SnowLuma，平台交互走原生适配器；MCP 与 Agent Skills 用于扩展能力。
 
-当前处于工程初始化阶段：已有技术方案和开发约定，尚未实现机器人、连接 QQ 或调用收费模型。完整目标包含参与判断、主动发言、人物记忆、知识库、联网搜索、图片/表情包及语音。是否语音及说什么由 LLM 决定，首个 TTS 供应商为 Fish Audio。
+当前处于文字闭环开发阶段：已实现回复有效性规则、内存发送保护、日志编解码和LangGraph本地回放；尚未连接QQ或调用收费模型。完整目标包含参与判断、主动发言、人物记忆、知识库、联网搜索、图片/表情包及语音。是否语音及说什么由 LLM 决定，首个 TTS 供应商为 Fish Audio。
 
 ## 开发方式
 
@@ -12,7 +12,7 @@
 - [领域词汇与边界](CONTEXT.md)
 - [技术方案目录](docs/architecture/00-index.md)
 - [规格清单](specs/README.md)
-- [首个规格：回复有效性判定](specs/001-reply-validity/spec.md)（草案，测试边界待确认）
+- [首个规格：回复有效性判定](specs/001-reply-validity/spec.md)（已验证）
 
 ## 本地环境
 
@@ -25,7 +25,15 @@ uv run ruff format --check .
 uv run mypy src
 ```
 
-功能测试加入后运行 `uv run pytest`。初始化阶段没有业务实现或业务测试，不把空测试集称为通过。首次环境准备可能需要下载 Python 和依赖。
+运行 `uv run pytest` 执行行为测试。首次环境准备可能需要下载 Python 和依赖。
+
+本地演示（纯假模型，输出沉默与发送结果，不连接外部服务）：
+
+```sh
+PYTHONPATH=src uv run python -m xiaolv.replay
+```
+
+当前去重和发送状态只保存在内存中，不能用于真实QQ上线。持久化outbox、配置、真实适配器及权限配额仍在开发。
 
 ## 目录
 
