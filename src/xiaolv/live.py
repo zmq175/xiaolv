@@ -124,7 +124,11 @@ async def run_live(
             worker = ChatWorker(
                 PostgresTurns(engine),
                 TextRuntime(
-                    ChatCompletionsModel(gateway),
+                    ChatCompletionsModel(
+                        gateway,
+                        profile=settings.bot_profile,
+                        max_reply_chars=settings.max_reply_chars,
+                    ),
                     delivery,
                     clock,
                     max_chars=settings.max_reply_chars,

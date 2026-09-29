@@ -171,3 +171,36 @@ def test_live_startup_does_not_require_hosting_cost_estimate():
     settings = load_settings(env)
     assert settings.mode == "live"
     assert settings.monthly_fixed_cost_cny is None
+
+
+@pytest.mark.parametrize(
+    "profile",
+    [
+        {"name": "   "},
+        {"name": "x" * 65},
+        {"aliases": "not-a-list"},
+        {"aliases": [""]},
+        {"aliases": ["a"] * 33},
+        {"personality": "x" * 2001},
+        {"reply_style": "x" * 1001},
+        {"participation_style": "x" * 1001},
+        {"name": "synthetic-private-profile", "permissions": "admin"},
+    ],
+)
+def test_invalid_persona_is_rejected_without_echoing_profile(profile):
+    import json
+
+    from xiaolv.settings import ConfigError
+
+    with pytest.raises(ConfigError) as raised:
+        load_settings({"XIAOLV_BOT_PROFILE": json.dumps(profile)})
+    assert "synthetic-private-profile" not in str(raised.value)
+    assert "bot_profile" in str(raised.value)
+
+
+def test_persona_json_syntax_error_is_sanitized():
+    from xiaolv.settings import ConfigError
+
+    with pytest.raises(ConfigError) as raised:
+        load_settings({"XIAOLV_BOT_PROFILE": '{"name":"private-profile"'})
+    assert "private-profile" not in str(raised.value)

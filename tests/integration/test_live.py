@@ -366,7 +366,7 @@ async def test_live_command_sends_and_exits_cleanly_on_sigterm(database_url, ser
     import sys
     from pathlib import Path
 
-    from pydantic import SecretStr
+    from pydantic import BaseModel, SecretStr
 
     configured = settings(database_url, services)
     env = {key: value for key, value in os.environ.items() if not key.startswith("XIAOLV_")}
@@ -375,6 +375,8 @@ async def test_live_command_sends_and_exits_cleanly_on_sigterm(database_url, ser
         if value is not None:
             if isinstance(value, SecretStr):
                 value = value.get_secret_value()
+            elif isinstance(value, BaseModel):
+                value = value.model_dump_json()
             elif isinstance(value, tuple):
                 value = json.dumps(value)
             env["XIAOLV_" + key.upper()] = str(value)
@@ -534,3 +536,30 @@ async def test_database_failure_stops_service_without_model_or_send(database_url
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         await engine.dispose()
+
+
+async def test_live_uses_configured_persona_and_reply_limit(database_url, services):
+    from xiaolv.live import LiveSummary
+
+    stats = LiveSummary()
+    stop = asyncio.Event()
+    configured = settings(
+        database_url,
+        services,
+        XIAOLV_BOT_PROFILE='{"name":"阿栀","aliases":["栀子"]}',
+        XIAOLV_MAX_REPLY_CHARS="60",
+    )
+    task = asyncio.create_task(run_live(configured, stop, statistics=stats))
+    try:
+        await until(lambda: stats.outcomes.get("confirmed") == 1, task)
+        stop.set()
+        await asyncio.wait_for(task, 6)
+        assert len(services.model_requests) == 2
+        for request in services.model_requests:
+            assert "阿栀" in request["messages"][0]["content"]
+            assert "小绿" not in request["messages"][0]["content"]
+        assert "60字" in services.model_requests[1]["messages"][0]["content"]
+    finally:
+        stop.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
