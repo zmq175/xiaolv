@@ -29,5 +29,6 @@
 | [020 发送准备](020-delivery-preparation/spec.md) | Verified | 只读准备、期限与epoch复核、失败/取消语义和PG并发认领 |
 | [021 动态成员核实](021-live-member-resolution/spec.md) | Verified | 当前群成员列表、严格响应校验、原生@与在线出口接线；模型选择待完成 |
 | [022 模型成员选择](022-model-mentions/spec.md) | Verified | 模型member_ref选择、范围复核、动态校验与在线原生@；真实QQ待验收 |
+| [023 引用上下文](023-quoted-context/spec.md) | Verified | 当前会话引用关系、缺失/歧义及包含元数据的长度裁剪 |
 
 Verified仅表示该规格明示范围通过验证，不代表完整首版或真实QQ上线验收。每个规格包含spec.md、plan.md、evidence.md。开发流程见CONTRIBUTING.md。

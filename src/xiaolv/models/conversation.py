@@ -88,6 +88,10 @@ class ChatCompletionsModel:
         ):
             raise ValueError("conversation context scope mismatch")
         messages: list[dict[str, object]] = []
+        events = {
+            f"message_{index}": item
+            for index, item in enumerate(reversed(candidate.context.messages[-30:]), 1)
+        }
         payload = {
             "target_text": candidate.text[:1000],
             "target_truncated": len(candidate.text) > 1000,
@@ -97,6 +101,7 @@ class ChatCompletionsModel:
             messages.insert(
                 0,
                 {
+                    "message_ref": f"message_{index}",
                     "account": item.sender_account_id,
                     "name": item.display_name[:128],
                     "text": item.text[:1000],
@@ -108,4 +113,33 @@ class ChatCompletionsModel:
             if len(json.dumps(payload, ensure_ascii=False)) > 12000:
                 messages.pop(0)
                 break
-        return json.dumps(payload, ensure_ascii=False)
+        counts: dict[str, int] = {}
+        for event in candidate.context.messages:
+            counts[event.message_id] = counts.get(event.message_id, 0) + 1
+        while True:
+            by_id = {
+                events[str(row["message_ref"])].message_id: row["message_ref"] for row in messages
+            }
+            for row in messages:
+                row["replies"] = [
+                    {
+                        "status": (
+                            "ambiguous"
+                            if counts.get(part.reference or "", 0) > 1
+                            else "resolved"
+                            if part.reference in by_id
+                            else "missing"
+                        ),
+                        "target_ref": (
+                            by_id.get(part.reference or "")
+                            if counts.get(part.reference or "", 0) == 1
+                            else None
+                        ),
+                    }
+                    for part in events[str(row["message_ref"])].parts
+                    if part.kind == "reply"
+                ]
+            serialized = json.dumps(payload, ensure_ascii=False)
+            if len(serialized) <= 12000 or not messages:
+                return serialized
+            messages.pop(0)
