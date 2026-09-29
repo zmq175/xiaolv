@@ -64,8 +64,8 @@ SIGTERM会让Uvicorn停止请求并完成数据库资源释放。stdout不输出
 
 历史API：GET `/admin/api/profile/releases`，参数limit为1–50（默认20），before为正bigint范围版本上界且不包含该版本；返回items和next_before。列表仅含version、name、created_at，不传人设正文；正文按单个版本读取。
 
-## 会话停用控制（后端已接入）
+## 会话停用控制
 
 聊天服务启动时登记配置允许的群/私聊，登记不覆盖已有停用状态。当前管理HTTP提供GET /admin/api/conversations（limit默认20，最多50，after游标）以及PUT /admin/api/conversations/{conversation_id}。写入JSON为enabled布尔值和expected_version，并要求登录Cookie、Origin、X-CSRF-Token、Idempotency-Key。同会话同键同请求返回原响应，同键变参或旧版本返回409。未知会话404。列表表示已登记会话，不是实时连接清单。
 
-停用与旧回合epoch失效同事务；恢复不会让旧回复重新有效。在线模型每个阶段以及PG最终发送认领读取当前权限。环境路由仍限制可执行范围，管理恢复不能打开未配置路由。已被最终发送认领接受的在途请求可能完成，不能据此承诺撤销平台副作用。网页开关尚未实现，SPEC-039仍在进行中。升级前按现有流程执行Alembic迁移0012；旧schema由启动门禁拒绝。
+停用与旧回合epoch失效同事务；恢复不会让旧回复重新有效。在线模型每个阶段以及PG最终发送认领读取当前权限。环境路由仍限制可执行范围，管理恢复不能打开未配置路由。已被最终发送认领接受的在途请求可能完成，不能据此承诺撤销平台副作用。管理台会话列表可停用/恢复、刷新和加载更多；响应丢失使用原幂等请求重试，版本冲突要求刷新当前状态。停用和恢复会清除尚未认领的排队候选。升级前按现有流程执行Alembic迁移0012；旧schema由启动门禁拒绝。

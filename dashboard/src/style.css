@@ -348,3 +348,58 @@ textarea:focus-visible {
     width: 100%;
   }
 }
+
+.conversation-controls {
+  padding: 28px;
+  border: 1px solid #d8e2d8;
+  background: #fff;
+  border-radius: 10px;
+  margin-bottom: 24px;
+}
+.conversation-controls h2 {
+  font-size: 22px;
+  margin-top: 0;
+}
+.conversation-controls p {
+  line-height: 1.6;
+}
+.conversation-list {
+  list-style: none;
+  padding: 0;
+}
+.conversation-list li {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  justify-content: space-between;
+  padding: 16px 0;
+  border-bottom: 1px solid #e3e9e3;
+}
+.conversation-list li div {
+  min-width: 0;
+}
+.conversation-list strong {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.conversation-list span {
+  display: block;
+  color: #58695e;
+  margin-top: 6px;
+}
+.conversation-controls button {
+  width: auto;
+  margin: 0;
+  padding: 0 18px;
+  flex-shrink: 0;
+}
+.conversation-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+@media (max-width: 480px) {
+  .conversation-controls {
+    padding: 20px;
+  }
+}

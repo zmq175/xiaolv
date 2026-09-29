@@ -508,3 +508,132 @@ async def test_slow_history_preview_cannot_replace_later_selection(admin_url):
         finally:
             hold.set()
             await browser.close()
+
+
+@pytest.mark.parametrize("width,height", [(1280, 800), (390, 844)])
+async def test_browser_conversation_stop_and_restore(admin_url, database_url, width, height):
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from xiaolv.storage.conversation_control import ConversationControl
+
+    engine = create_async_engine(database_url, hide_parameters=True)
+    try:
+        await ConversationControl(engine).register(["qq:10000:group:20000"])
+    finally:
+        await engine.dispose()
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch()
+        try:
+            page = await browser.new_page(viewport={"width": width, "height": height})
+            await page.goto(admin_url + "/admin/")
+            await page.get_by_label("管理员密码", exact=True).fill(PASSWORD)
+            await page.get_by_role("button", name="登录", exact=True).click()
+            panel = page.get_by_role("region", name="会话管理")
+            await expect(panel).to_be_visible()
+            await expect(panel.get_by_text("qq:10000:group:20000", exact=True)).to_be_visible()
+            await panel.get_by_role("button", name="停用", exact=True).click()
+            await expect(panel.get_by_text("已停用", exact=True)).to_be_visible()
+            await page.reload()
+            await expect(panel.get_by_role("button", name="恢复", exact=True)).to_be_visible()
+            await panel.get_by_role("button", name="恢复", exact=True).click()
+            await expect(panel.get_by_text("已启用", exact=True)).to_be_visible()
+            assert await page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+            await panel.screenshot(path=f"artifacts/conversations-{width}.png")
+        finally:
+            await browser.close()
+
+
+async def test_browser_conversation_lost_response_retries_original_operation(
+    admin_url, database_url
+):
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from xiaolv.storage.conversation_control import ConversationControl
+
+    engine = create_async_engine(database_url, hide_parameters=True)
+    try:
+        await ConversationControl(engine).register(["qq:10000:group:20000"])
+    finally:
+        await engine.dispose()
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch()
+        try:
+            page = await browser.new_page(viewport={"width": 390, "height": 844})
+            writes = []
+
+            async def drop_first_response(route):
+                if route.request.method == "PUT":
+                    writes.append(
+                        (route.request.headers["idempotency-key"], route.request.post_data)
+                    )
+                    if len(writes) == 1:
+                        await route.fetch()
+                        await route.abort()
+                        return
+                await route.continue_()
+
+            await page.route("**/admin/api/conversations/*", drop_first_response)
+            await page.goto(admin_url + "/admin/")
+            await page.get_by_label("管理员密码", exact=True).fill(PASSWORD)
+            await page.get_by_role("button", name="登录", exact=True).click()
+            panel = page.get_by_role("region", name="会话管理")
+            await panel.get_by_role("button", name="停用", exact=True).click()
+            await expect(panel.get_by_role("alert")).to_contain_text("无法确认")
+            await expect(panel.get_by_role("button", name="停用", exact=True)).to_be_disabled()
+            await panel.get_by_role("button", name="重试原操作").click()
+            await expect(panel.get_by_text("已停用", exact=True)).to_be_visible()
+            assert len(writes) == 2 and writes[0] == writes[1]
+            state = await page.evaluate("fetch('/admin/api/conversations').then(r => r.json())")
+            assert state["items"][0]["version"] == 1
+        finally:
+            await browser.close()
+
+
+async def test_browser_conversation_read_failure_and_conflict_recovery(admin_url, database_url):
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from xiaolv.storage.conversation_control import ConversationControl
+
+    engine = create_async_engine(database_url, hide_parameters=True)
+    try:
+        await ConversationControl(engine).register(["qq:10000:group:20000"])
+    finally:
+        await engine.dispose()
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch()
+        try:
+            page = await browser.new_page()
+            failed = False
+
+            async def fail_read(route):
+                nonlocal failed
+                if not failed:
+                    failed = True
+                    await route.abort()
+                else:
+                    await route.continue_()
+
+            await page.route("**/admin/api/conversations?*", fail_read)
+            await page.goto(admin_url + "/admin/")
+            await page.get_by_label("管理员密码", exact=True).fill(PASSWORD)
+            await page.get_by_role("button", name="登录", exact=True).click()
+            panel = page.get_by_role("region", name="会话管理")
+            await expect(panel.get_by_role("alert")).to_contain_text("无法读取")
+            await panel.get_by_role("button", name="刷新会话").click()
+            await expect(panel.get_by_role("button", name="停用", exact=True)).to_be_enabled()
+            await page.evaluate("""async () => {
+                const session = await fetch('/admin/api/session').then(r => r.json());
+                const response = await fetch('/admin/api/conversations/qq:10000:group:20000', {
+                    method: 'PUT', headers: {'Content-Type': 'application/json', 'X-CSRF-Token': session.csrf_token, 'Idempotency-Key': 'external-edit'},
+                    body: JSON.stringify({enabled: false, expected_version: 0})
+                });
+                if (!response.ok) throw new Error('external edit failed');
+            }""")
+            await panel.get_by_role("button", name="停用", exact=True).click()
+            await expect(panel.get_by_role("alert")).to_contain_text("已被修改")
+            await expect(panel.get_by_role("button", name="停用", exact=True)).to_be_disabled()
+            await panel.get_by_role("button", name="刷新会话").click()
+            await expect(panel.get_by_text("已停用", exact=True)).to_be_visible()
+            await expect(panel.get_by_role("button", name="恢复", exact=True)).to_be_enabled()
+        finally:
+            await browser.close()

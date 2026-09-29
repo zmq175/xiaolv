@@ -123,6 +123,10 @@ class ConversationControl:
                     ),
                     {"id": conversation},
                 )
+            await connection.execute(
+                text("DELETE FROM app.chat_candidates WHERE conversation_id = :id"),
+                {"id": conversation},
+            )
             response = {"conversation_id": conversation, "enabled": enabled, "version": version + 1}
             await connection.execute(
                 text("""

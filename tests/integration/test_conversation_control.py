@@ -170,3 +170,90 @@ async def test_control_http_auth_conflicts_and_pagination(database_url, password
             assert (await http.get("/admin/api/conversations?limit=51")).status_code == 422
     finally:
         await engine.dispose()
+
+
+@pytest.mark.parametrize(
+    "mode,expected,sent", [("before_claim", "superseded", 0), ("inflight", "confirmed", 1)]
+)
+async def test_separate_worker_revocation_ordering(
+    database_url, password_hash, mode, expected, sent
+):
+    import asyncio
+    import json
+    import os
+    import sys
+
+    from xiaolv.storage.conversation_control import ConversationControl
+
+    engine = create_async_engine(database_url, hide_parameters=True)
+    process = None
+    try:
+        await ConversationControl(engine).register(["qq:1:group:2"])
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "tests/helpers/conversation_race_worker.py",
+            mode,
+            env={**os.environ, "XIAOLV_TEST_WORKER_DB": database_url, "PYTHONPATH": "src"},
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        ready = await asyncio.wait_for(process.stdout.readline(), 5)
+        assert ready == b"ready\n", (await process.stderr.read()).decode() if not ready else ready
+        async with client(engine, password_hash) as http:
+            login = await http.post("/admin/api/login", json={"password": PASSWORD})
+            http.headers["X-CSRF-Token"] = login.json()["csrf_token"]
+            response = await http.put(
+                "/admin/api/conversations/qq:1:group:2",
+                json={"enabled": False, "expected_version": 0},
+                headers={"Idempotency-Key": "stop-worker"},
+            )
+            assert response.status_code == 200
+            # Even immediate restoration must not revive a pre-stop reply.
+            if mode == "before_claim":
+                response = await http.put(
+                    "/admin/api/conversations/qq:1:group:2",
+                    json={"enabled": True, "expected_version": 1},
+                    headers={"Idempotency-Key": "restore-worker"},
+                )
+                assert response.status_code == 200
+        stdout, stderr = await asyncio.wait_for(process.communicate(b"continue\n"), 5)
+        assert process.returncode == 0, stderr.decode()
+        assert json.loads(stdout) == {"status": expected, "sent": sent}
+    finally:
+        if process is not None and process.returncode is None:
+            process.kill()
+            await process.communicate()
+        await engine.dispose()
+
+
+async def test_stop_and_restore_discards_queued_messages(database_url, password_hash):
+    from test_chat_worker import CONVERSATION, frame, setup
+
+    from xiaolv.storage.conversation_control import ConversationControl
+
+    engine = create_async_engine(database_url, hide_parameters=True)
+    try:
+        await ConversationControl(engine).register([CONVERSATION])
+        incoming, worker, model, platform = setup(engine)
+        assert (await incoming.receive(frame(message_id=1))).status == "stored"
+        async with client(engine, password_hash) as http:
+            login = await http.post("/admin/api/login", json={"password": PASSWORD})
+            http.headers["X-CSRF-Token"] = login.json()["csrf_token"]
+            for enabled, version in ((False, 0), (True, 1)):
+                response = await http.put(
+                    f"/admin/api/conversations/{CONVERSATION}",
+                    json={"enabled": enabled, "expected_version": version},
+                    headers={"Idempotency-Key": f"change-{version}"},
+                )
+                assert response.status_code == 200
+                if not enabled:
+                    assert await worker.run_once() == "idle"
+                    assert (await incoming.receive(frame(message_id=2))).status == "stored"
+            assert await worker.run_once() == "idle"
+            assert model.candidates == []
+            assert platform.sent == []
+            assert (await incoming.receive(frame(message_id=3))).status == "stored"
+            assert await worker.run_once() == "confirmed"
+    finally:
+        await engine.dispose()
