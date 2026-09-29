@@ -310,3 +310,107 @@ async def test_rebuilt_worker_consumes_pending_but_does_not_repeat_finished_turn
         assert platform.sent == []
     finally:
         await third.dispose()
+
+
+async def test_sigkill_recovery_expires_old_turn_and_allows_only_new_candidate(database_url):
+    import asyncio
+    import json
+    import os
+    import signal
+    import sys
+
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        "tests/helpers/crash_worker.py",
+        env={
+            "PATH": os.defpath,
+            "PYTHONPATH": "src",
+            "LANGSMITH_TRACING": "false",
+            "XIAOLV_TEST_DATABASE_URL": database_url,
+        },
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), 10)
+    finally:
+        if process.returncode is None:
+            process.kill()
+            await process.wait()
+    assert process.returncode == -signal.SIGKILL, stderr.decode()
+    claimed = json.loads(stdout)
+    engine = create_async_engine(database_url, hide_parameters=True)
+    try:
+        incoming, worker, model, platform = setup(engine)
+        await incoming.receive(frame(message_id=901, content="重启后的新消息"))
+        assert await worker.run_once() == "idle"
+        remaining = (datetime.fromisoformat(claimed["expires"]) - clock()).total_seconds()
+        await asyncio.sleep(max(0, remaining) + 0.05)
+        assert await worker.recover() == 1
+        assert await worker.turn_status(claimed["turn"]) == "expired"
+        assert await worker.recover() == 0
+        assert await worker.run_once() == "confirmed"
+        assert [candidate.text for candidate in model.candidates] == ["重启后的新消息"]
+        assert model.candidates[0].generation_epoch == 2
+        assert len(platform.sent) == 1
+        assert await worker.run_once() == "idle"
+    finally:
+        await engine.dispose()
+
+
+async def test_late_old_worker_cannot_release_new_workers_lease(database_url):
+    import asyncio
+    from datetime import timedelta
+
+    class HeldModel(Model):
+        def __init__(self):
+            super().__init__()
+            self.entered = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def reply(self, candidate):
+            self.entered.set()
+            await self.release.wait()
+            return "仍有效的回复"
+
+    engine = create_async_engine(database_url, hide_parameters=True)
+    old_model, new_model = HeldModel(), HeldModel()
+    tasks = []
+    try:
+        old_policy = CandidatePolicy(
+            frozenset({CONVERSATION}), merge_seconds=0, ttl_seconds=0.3, queue_age_seconds=0.2
+        )
+        old_incoming, _, _, old_platform = setup(engine, policy=old_policy)
+        old_delivery = DeliveryService(old_platform, ledger=PostgresDeliveryLedger(engine))
+        # Simulate an old worker whose local clock is behind PostgreSQL's authority.
+        old_worker = ChatWorker(
+            PostgresTurns(engine),
+            TextRuntime(old_model, old_delivery, lambda: clock() - timedelta(seconds=30)),
+        )
+        await old_incoming.receive(frame(message_id=1, time=int(clock().timestamp()) + 10))
+        old_task = asyncio.create_task(old_worker.run_once())
+        tasks.append(old_task)
+        await asyncio.wait_for(old_model.entered.wait(), 2)
+        remaining = (old_model.candidates[0].expires_at - clock()).total_seconds()
+        await asyncio.sleep(max(0, remaining) + 0.02)
+        incoming, worker, _, platform = setup(engine, new_model)
+        await incoming.receive(frame(message_id=2))
+        new_task = asyncio.create_task(worker.run_once())
+        tasks.append(new_task)
+        await asyncio.wait_for(new_model.entered.wait(), 2)
+        assert await worker.recover() == 1
+        old_model.release.set()
+        assert await old_task == "expired"
+        assert await worker.turn_status(old_model.candidates[0].event_id) == "expired"
+        await incoming.receive(frame(message_id=3))
+        assert await worker.run_once() == "idle"
+        assert old_platform.sent == []
+        new_model.release.set()
+        assert await new_task == "confirmed"
+        assert await worker.run_once() == "confirmed"
+        assert len(platform.sent) == 2
+    finally:
+        old_model.release.set()
+        new_model.release.set()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await engine.dispose()

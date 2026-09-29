@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from math import isfinite
 from uuid import uuid4
 
 from pydantic import TypeAdapter
@@ -21,6 +22,25 @@ class CandidatePolicy:
     max_merge_seconds: float = 2
     ttl_seconds: float = 45
     queue_age_seconds: float = 10
+
+    def __post_init__(self) -> None:
+        durations = (
+            self.merge_seconds,
+            self.max_merge_seconds,
+            self.ttl_seconds,
+            self.queue_age_seconds,
+        )
+        if any(type(value) not in (int, float) or not isfinite(value) for value in durations):
+            raise ValueError("invalid candidate policy durations")
+        if (
+            min(self.merge_seconds, self.max_merge_seconds) < 0
+            or not 0 < self.queue_age_seconds <= self.ttl_seconds
+        ):
+            raise ValueError("invalid candidate policy limits")
+        if not isinstance(self.enabled_conversations, frozenset) or any(
+            not isinstance(item, str) or not item.strip() for item in self.enabled_conversations
+        ):
+            raise ValueError("invalid candidate policy conversations")
 
 
 async def offer_candidate(
@@ -59,6 +79,41 @@ async def offer_candidate(
 class PostgresTurns:
     def __init__(self, engine: AsyncEngine) -> None:
         self._engine = engine
+
+    async def status(self, turn_id: str) -> str | None:
+        async with self._engine.connect() as connection:
+            result = await connection.execute(
+                text("SELECT status FROM app.chat_turns WHERE turn_id = :turn"), {"turn": turn_id}
+            )
+            status: str | None = result.scalar_one_or_none()
+            return status
+
+    async def recover(self) -> int:
+        async with self._engine.begin() as connection:
+            result = await connection.execute(
+                text("""
+                SELECT t.turn_id, t.conversation_id FROM app.chat_turns t
+                JOIN app.conversation_state s USING (conversation_id)
+                WHERE t.status = 'running' AND t.expires_at <= clock_timestamp()
+                ORDER BY t.expires_at LIMIT 100 FOR UPDATE OF s SKIP LOCKED
+            """)
+            )
+            rows = result.mappings().all()
+            for row in rows:
+                await connection.execute(
+                    text("""
+                    UPDATE app.conversation_state SET active_turn_id = NULL, turn_lease_until = NULL
+                    WHERE conversation_id = :conversation AND active_turn_id = :turn
+                """),
+                    {"conversation": row["conversation_id"], "turn": row["turn_id"]},
+                )
+                await connection.execute(
+                    text(
+                        "UPDATE app.chat_turns SET status = 'expired' WHERE turn_id = :turn AND status = 'running'"
+                    ),
+                    {"turn": row["turn_id"]},
+                )
+            return len(rows)
 
     async def claim(self) -> ConversationCandidate | None:
         async with self._engine.begin() as connection:

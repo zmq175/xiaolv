@@ -14,6 +14,8 @@
 
 | [010 入站归一化](010-onebot-ingress/spec.md) | Verified | 群/私聊/临时会话、结构化段及时间 |
 | [011 持久入站](011-persistent-inbox/spec.md) | Verified | PG去重、版本快照、隔离与故障回滚 |
-| [012 持久候选调度](012-durable-candidates/spec.md) | Implementing | 11个worker用例；强制终止恢复待验收 |
+| [012 持久候选调度](012-durable-candidates/spec.md) | Verified | 合并、租约、SIGKILL恢复与旧worker隔离 |
+
+| [013 文字模型协议](013-chat-model/spec.md) | Implementing | 38个协议/配置用例；usage计费衔接待完成 |
 
 Verified仅表示该规格明示范围通过验证，不代表完整首版或真实QQ上线验收。每个规格包含spec.md、plan.md、evidence.md。开发流程见CONTRIBUTING.md。

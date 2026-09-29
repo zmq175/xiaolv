@@ -1,6 +1,6 @@
 # SPEC-012：持久候选与文字 worker
 
-状态：Implementing。沿用已确认的入站/回放入口和DeliveryService边界。
+状态：Verified（仅本规格范围）。沿用已确认的入站/回放入口和DeliveryService边界。
 
 `IncomingMessages.receive`将新鲜、已启用会话的消息与候选在同一事务登记。`ChatWorker.run_once()`认领一个已到合并时间的会话，调用已有TextRuntime，并返回结果；没有可运行候选返回idle。模型通过ConversationCandidate获得最近会话上下文及观察版本。
 
@@ -10,5 +10,9 @@
 - AC-004：首次候选的TTL/队列年龄和最迟合并时刻不能被连续消息无限延长。过期积压被丢弃，不调用模型、不发送。
 - AC-005：运行期间新消息持续入库形成下一候选，不直接递增epoch取消当前回复。完成后释放租约；未提交计算崩溃后不自动重做，新的候选可在旧租约过期后推进。
 - AC-006：候选、回合ID/epoch/观察revision/结果均持久化。连接重建可处理仍有效的未认领候选；旧worker不能释放其他回合租约。取消标记cancelled并传播。
+
+- AC-007：CandidatePolicy要求有限数值，合并时长非负，TTL/队列年龄为正且队列年龄不超过TTL；启用会话集合不可变且不含空值，错误配置在处理消息前拒绝。
+
+`ChatWorker.recover()`将到期仍running回合标记expired并释放其自身租约，不重新排队；幂等返回本次恢复数量。`turn_status(turn_id)`提供管理/回放审计结果，未找到返回None。恢复与finish均不能释放其他turn持有的租约。
 
 当前只执行文字模型已有respond/silence语义；DEFER、基于话题的相关性复核、权限/配额动态撤销、全局模型限流及长期记忆在后续规格实现。会话静态allowlist是此切片的默认关闭门控，不等同管理端完整授权。原生网络接收循环尚未接线，测试以真实PG和合成消息/模型/平台验证。
