@@ -4,12 +4,8 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path
 
-from alembic.config import Config
-from alembic.script import ScriptDirectory
 from opentelemetry import trace
-from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from websockets.exceptions import WebSocketException
@@ -31,6 +27,7 @@ from xiaolv.storage.postgres_delivery import PostgresDeliveryLedger
 from xiaolv.storage.postgres_inbox import PostgresInbox
 from xiaolv.storage.postgres_model_capacity import PostgresModelCapacity
 from xiaolv.storage.postgres_turns import CandidatePolicy, PostgresTurns
+from xiaolv.storage.schema import schema_is_current
 
 
 class LiveRuntimeError(RuntimeError):
@@ -193,20 +190,11 @@ async def run_live(
 
 
 async def _check_schema(engine: AsyncEngine) -> None:
-    root = Path(__file__).resolve().parents[2]
-    config = Config(str(root / "alembic.ini"))
-    config.set_main_option("script_location", str(root / "migrations"))
-    expected = ScriptDirectory.from_config(config).get_current_head()
     try:
-        async with engine.connect() as connection:
-            revisions: list[str] = list(
-                (await connection.execute(text("SELECT version_num FROM alembic_version")))
-                .scalars()
-                .all()
-            )
+        current = await schema_is_current(engine)
     except SQLAlchemyError:
         raise LiveRuntimeError("database_schema_unavailable") from None
-    if revisions != [expected]:
+    if not current:
         raise LiveRuntimeError("database_schema_mismatch")
 
 

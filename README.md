@@ -37,6 +37,8 @@ PYTHONPATH=src uv run python -m xiaolv
 
 数据库开发说明见[持久化测试与迁移](docs/postgres-development.md)。完整进度见[开发状态](docs/development-status.md)。
 
+独立管理进程的密码初始化、认证HTTP启动和SSH访问方式见[管理服务](docs/admin-service.md)。管理网页和配置发布仍在开发，不能将HTTP认证服务视为完整管理端。
+
 ## 目录
 
 ```text

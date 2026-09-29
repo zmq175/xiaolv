@@ -37,5 +37,6 @@
 | [028 有序文字发送](028-ordered-text/spec.md) | Verified | 已解析文字/@顺序、独立引用、结构校验、回放与PG重启幂等；模型生成接线待完成 |
 | [029 模型有序回复](029-model-ordered-text/spec.md) | Verified | 模型parts解析、在线文字/@/引用顺序、非法意图零发送；真实供应商与QQ待验收 |
 | [030 管理HTTP认证](030-admin-auth/spec.md) | Verified | 密码库、PG会话、Cookie/CSRF/Origin、过期撤销、并发限速；网页与部署待完成 |
+| [031 独立管理服务](031-admin-server/spec.md) | Verified | 密码文件初始化、真实子进程HTTP登录/停止、配置与schema门禁；浏览器页面待完成 |
 
 Verified仅表示该规格明示范围通过验证，不代表完整首版或真实QQ上线验收。每个规格包含spec.md、plan.md、evidence.md。开发流程见CONTRIBUTING.md。
