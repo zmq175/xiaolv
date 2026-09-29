@@ -278,3 +278,145 @@ async def test_quote_does_not_bypass_delivery_validity(stale, expected):
         outgoing = replace(outgoing, generation_epoch=0)
     assert await sender.deliver(outgoing) == expected
     assert rpc.requests == []
+
+
+async def test_dynamic_member_resolution_sends_native_mention():
+    from dataclasses import replace
+
+    from xiaolv.platforms.onebot import OneBotPreparation
+
+    class MemberRPC(RecordingRPC):
+        async def call(self, action, params):
+            if action == "get_group_member_list":
+                self.requests.append((action, params))
+                return {
+                    "status": "ok",
+                    "retcode": 0,
+                    "data": [{"group_id": 10001, "user_id": 10002}],
+                }
+            return await super().call(action, params)
+
+    rpc = MemberRPC()
+    routes = {"internal-chat": QQTarget("group", 10001)}
+    sender = DeliveryService(
+        OneBotSender(rpc, routes),
+        lambda: NOW,
+        lambda _: 1,
+        prepare=OneBotPreparation(rpc, routes),
+    )
+    outgoing = replace(request(), mentions=("qq:10002",))
+    assert await sender.deliver(outgoing) == "confirmed"
+    assert rpc.requests == [
+        ("get_group_member_list", {"group_id": 10001, "no_cache": True}),
+        (
+            "send_group_msg",
+            {
+                "group_id": 10001,
+                "message": [
+                    {"type": "at", "data": {"qq": "10002"}},
+                    {"type": "text", "data": {"text": outgoing.text}},
+                ],
+            },
+        ),
+    ]
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"status": "failed", "retcode": 1200, "data": [{"group_id": 10001, "user_id": 10002}]},
+        {"status": "ok", "retcode": False, "data": [{"group_id": 10001, "user_id": 10002}]},
+        {"status": "ok", "retcode": 0, "data": [{"group_id": 99999, "user_id": 10002}]},
+        {"status": "ok", "retcode": 0, "data": [{"group_id": 10001, "user_id": "10002"}]},
+        {"status": "ok", "retcode": 0, "data": [{"group_id": 10001, "user_id": 10002}, None]},
+        {"status": "ok", "retcode": 0, "data": []},
+    ],
+)
+async def test_dynamic_member_lookup_rejects_untrusted_or_absent_members(response):
+    from dataclasses import replace
+
+    from xiaolv.platforms.onebot import OneBotPreparation
+
+    rpc = RecordingRPC(response)
+    routes = {"internal-chat": QQTarget("group", 10001)}
+    sender = DeliveryService(
+        OneBotSender(rpc, routes),
+        lambda: NOW,
+        lambda _: 1,
+        prepare=OneBotPreparation(rpc, routes),
+    )
+    assert await sender.deliver(replace(request(), mentions=("qq:10002",))) == "not_sent"
+    assert rpc.requests == [("get_group_member_list", {"group_id": 10001, "no_cache": True})]
+
+
+@pytest.mark.parametrize(
+    "kind,mentions,reply_to",
+    [
+        ("private", ("qq:10002",), None),
+        ("group", ("all",), None),
+        ("group", ("Alice",), None),
+        ("group", ("qq:010002",), None),
+        ("group", (), "unresolved-message"),
+    ],
+)
+async def test_dynamic_preparation_rejects_unsupported_targets_before_rpc(kind, mentions, reply_to):
+    from dataclasses import replace
+
+    from xiaolv.platforms.onebot import OneBotPreparation
+
+    rpc = RecordingRPC()
+    routes = {"internal-chat": QQTarget(kind, 10001)}
+    sender = DeliveryService(
+        OneBotSender(rpc, routes),
+        lambda: NOW,
+        lambda _: 1,
+        prepare=OneBotPreparation(rpc, routes),
+    )
+    outgoing = replace(request(), mentions=mentions, reply_to=reply_to)
+    assert await sender.deliver(outgoing) == "not_sent"
+    assert rpc.requests == []
+
+
+async def test_dynamic_preparation_does_not_query_members_for_plain_text():
+    from xiaolv.platforms.onebot import OneBotPreparation
+
+    rpc = RecordingRPC()
+    routes = {"internal-chat": QQTarget("group", 10001)}
+    sender = DeliveryService(
+        OneBotSender(rpc, routes),
+        lambda: NOW,
+        lambda _: 1,
+        prepare=OneBotPreparation(rpc, routes),
+    )
+    assert await sender.deliver(request()) == "confirmed"
+    assert [action for action, _ in rpc.requests] == ["send_group_msg"]
+
+
+async def test_reply_expiring_during_member_lookup_never_sends():
+    from dataclasses import replace
+
+    from xiaolv.platforms.onebot import OneBotPreparation
+
+    now = NOW
+
+    class SlowMembers(RecordingRPC):
+        async def call(self, action, params):
+            nonlocal now
+            self.requests.append((action, params))
+            now = NOW + timedelta(minutes=30)
+            return {
+                "status": "ok",
+                "retcode": 0,
+                "data": [{"group_id": 10001, "user_id": 10002}],
+            }
+
+    rpc = SlowMembers()
+    routes = {"internal-chat": QQTarget("group", 10001)}
+    sender = DeliveryService(
+        OneBotSender(rpc, routes),
+        lambda: now,
+        lambda _: 1,
+        prepare=OneBotPreparation(rpc, routes),
+    )
+    assert await sender.deliver(replace(request(), mentions=("qq:10002",))) == "expired"
+    assert rpc.requests == [("get_group_member_list", {"group_id": 10001, "no_cache": True})]

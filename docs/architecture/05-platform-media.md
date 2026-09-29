@@ -103,6 +103,8 @@ TextPart升级为有序segments，其中包含TextSegment(text)和MentionSegment
 
 源码地址：https://github.com/SnowLuma/SnowLuma/blob/1ef9a2c33023b5fcb400865c8281d2dfd190540b/packages/onebot/src/event-converter/element-codecs.ts
 
+动态发送准备见 SPEC-021：通过 get_group_member_list(group_id, no_cache=true) 核实成员，严格检查响应和每条记录的群范围。不能用 get_group_member_info 返回了匹配账号作为在群证明：参考版本可能对查不到的账号返回占位资料。准备成功后由 DeliveryService 再检查期限与 epoch 并认领发送。普通文字不查询成员，未找到目标不静默去掉 @。当前模型选择仍待接线，no_cache 的实际效果及通知需真实 QQ 验收。
+
 ## 9. 首个TTS实现：FishAudioProvider
 
 已选Fish Audio作为首个真实TTS供应商，保持SpeechSynthesizer接口不变。实现放在infrastructure/speech/fish_audio.py；业务只传SpeechRequest和ExecutionContext，返回AudioArtifact，不接触Fish专属模型头、音色ID和SDK类型。测试另用FakeSpeechProvider验证可替换性，首版不同时开发多家真实供应商。

@@ -22,7 +22,7 @@ from xiaolv.domain.model_usage import ModelCallReport
 from xiaolv.models.chat_completions import ChatCompletionsGateway
 from xiaolv.models.conversation import ChatCompletionsModel
 from xiaolv.orchestration.text_runtime import TextRuntime
-from xiaolv.platforms.onebot import OneBotSender, QQTarget
+from xiaolv.platforms.onebot import OneBotPreparation, OneBotSender, QQTarget
 from xiaolv.platforms.onebot_ingress import IngressError, OneBotIngress
 from xiaolv.platforms.onebot_ws import OneBotWebSocket
 from xiaolv.settings import ConfigError, Settings
@@ -111,7 +111,9 @@ async def run_live(
             if data["user_id"] != self_id:
                 raise LiveRuntimeError("onebot_account_mismatch")
             delivery = DeliveryService(
-                OneBotSender(rpc, routes), ledger=PostgresDeliveryLedger(engine)
+                OneBotSender(rpc, routes),
+                ledger=PostgresDeliveryLedger(engine),
+                prepare=OneBotPreparation(rpc, routes),
             )
             incoming = IncomingMessages(
                 OneBotIngress(self_id, settings.queue_max_age_seconds),
