@@ -1,7 +1,10 @@
 """Run one durable conversational candidate."""
 
 import asyncio
+import logging
 from typing import Protocol
+
+from opentelemetry import trace
 
 from xiaolv.orchestration.text_runtime import ConversationCandidate, TextRuntime
 
@@ -31,12 +34,25 @@ class ChatWorker:
         candidate = await self._queue.claim()
         if candidate is None:
             return "idle"
-        result = "failed"
-        try:
-            result = await self._runtime.run(candidate)
-            return result
-        except asyncio.CancelledError:
-            result = "cancelled"
-            raise
-        finally:
-            await asyncio.shield(self._queue.finish(candidate, result))
+        with trace.get_tracer(__name__).start_as_current_span(
+            "chat_turn", record_exception=False, set_status_on_exception=False
+        ):
+            result = "failed"
+            try:
+                result = await self._runtime.run(candidate)
+                return result
+            except asyncio.CancelledError:
+                result = "cancelled"
+                raise
+            finally:
+                await asyncio.shield(self._queue.finish(candidate, result))
+                logging.getLogger(__name__).info(
+                    "回合结束",
+                    extra={
+                        "event": "turn_finished",
+                        "fields": {
+                            "turn_id": candidate.event_id,
+                            "status": result,
+                        },
+                    },
+                )

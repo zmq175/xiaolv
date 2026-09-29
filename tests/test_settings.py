@@ -204,3 +204,34 @@ def test_persona_json_syntax_error_is_sanitized():
     with pytest.raises(ConfigError) as raised:
         load_settings({"XIAOLV_BOT_PROFILE": '{"name":"private-profile"'})
     assert "private-profile" not in str(raised.value)
+
+
+def test_logging_output_and_rotation_are_configurable():
+    settings = load_settings(
+        {
+            "XIAOLV_LOG_LEVEL": "DEBUG",
+            "XIAOLV_LOG_FILE": "/tmp/synthetic.log",
+            "XIAOLV_LOG_MAX_BYTES": "4096",
+            "XIAOLV_LOG_BACKUP_COUNT": "2",
+        }
+    )
+    assert settings.log_level == "DEBUG"
+    assert str(settings.log_file) == "/tmp/synthetic.log"
+    assert settings.log_max_bytes == 4096
+    assert settings.log_backup_count == 2
+
+
+@pytest.mark.parametrize(
+    "key,value",
+    [
+        ("LOG_LEVEL", "VERBOSE"),
+        ("LOG_MAX_BYTES", "0"),
+        ("LOG_BACKUP_COUNT", "0"),
+        ("LOG_BACKUP_COUNT", "101"),
+    ],
+)
+def test_invalid_log_settings_are_rejected(key, value):
+    from xiaolv.settings import ConfigError
+
+    with pytest.raises(ConfigError):
+        load_settings({"XIAOLV_" + key: value})

@@ -1,6 +1,6 @@
 # SPEC-016：标准日志框架接入
 
-状态：Ready。公共测试边界沿用用户已批准的日志、配置与回放/在线入口；内部实现自主。
+状态：Verified（标准日志接线；跨队列传播与生产采集待实现）。公共测试边界沿用用户已批准的日志、配置与回放/在线入口；内部实现自主。
 
 使用标准logging Logger/Handler/Formatter，OpenTelemetry API/SDK提供span上下文。现有codec仅供Formatter重用，不自建logger、文件轮转或trace ID生成。
 

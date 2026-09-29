@@ -406,6 +406,31 @@ async def test_live_command_sends_and_exits_cleanly_on_sigterm(database_url, ser
         assert summary["stored"] == 1
         assert summary["outcomes"] == {"confirmed": 1}
         assert "Traceback" not in stderr.decode()
+        from xiaolv.observability.log_format import parse_log
+
+        entries = [parse_log(line) for line in stderr.decode().splitlines()]
+        events = {entry.event for entry in entries}
+        assert {
+            "service_started",
+            "service_ready",
+            "event_received",
+            "chat_decision",
+            "model_call",
+            "outbox_transition",
+            "turn_finished",
+            "service_stopped",
+        } <= events
+        turn_entries = [
+            entry
+            for entry in entries
+            if entry.event in {"chat_decision", "model_call", "outbox_transition", "turn_finished"}
+        ]
+        assert len({entry.traceid for entry in turn_entries}) == 1
+        assert turn_entries[0].traceid != "0" * 32
+        assert sum(entry.event == "model_call" for entry in entries) == 2
+        assert len({entry.spanid for entry in entries if entry.event == "model_call"}) == 2
+        assert "小绿怎么看" not in stderr.decode()
+        assert "我觉得先试一下" not in stderr.decode()
         assert len(services.sent) == 1
     finally:
         if process.returncode is None:

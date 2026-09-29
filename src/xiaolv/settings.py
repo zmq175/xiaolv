@@ -3,6 +3,7 @@
 import json
 from collections.abc import Mapping
 from decimal import Decimal
+from pathlib import Path
 from typing import Annotated, Literal, Self
 from urllib.parse import urlsplit
 
@@ -21,6 +22,10 @@ class ConfigError(ValueError):
 class Settings(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
 
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    log_file: Path | None = None
+    log_max_bytes: int = Field(default=20 * 1024 * 1024, ge=1024)
+    log_backup_count: int = Field(default=5, ge=1, le=100)
     bot_profile: BotProfile = Field(default_factory=BotProfile)
     mode: Literal["replay", "live"] = "replay"
     database_url: SecretStr | None = None

@@ -1,6 +1,7 @@
 """Text replay entrypoint."""
 
 import asyncio
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -98,7 +99,11 @@ class TextRuntime:
         )
 
     async def _decide(self, state: _State) -> dict[str, str]:
-        return {"decision": await self._model.decide(state["candidate"])}
+        decision = await self._model.decide(state["candidate"])
+        logging.getLogger(__name__).info(
+            "参与判断完成", extra={"event": "chat_decision", "fields": {"action": decision}}
+        )
+        return {"decision": decision}
 
     async def _reply(self, state: _State) -> dict[str, str]:
         return {"text": await self._model.reply(state["candidate"])}

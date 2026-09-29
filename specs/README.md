@@ -22,7 +22,7 @@
 
 | [015 在线文字接线](015-live-text-service/spec.md) | Verified | 本机端到端、CLI信号、门控与恢复；真实平台待验收 |
 
-| [016 标准日志框架](016-standard-logging/spec.md) | Ready | logging/OpenTelemetry接线待实现 |
+| [016 标准日志框架](016-standard-logging/spec.md) | Verified | 标准logging、轮转、OTel回合内关联与CLI |
 | [017 模型SDK](017-model-sdk/spec.md) | Ready | 替换手写HTTP/SSE，待实现 |
 | [018 身份与提示词](018-configurable-persona/spec.md) | Verified | 配置改名、模板分离、长度一致、在线接线 |
 

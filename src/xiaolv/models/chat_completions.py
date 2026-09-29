@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 from uuid import uuid4
 
 import httpx
+from opentelemetry import trace
 
 from xiaolv.domain.model_budget import ModelBudget, ModelCallIntent
 from xiaolv.domain.model_usage import ModelCallReport, TokenUsage
@@ -93,6 +94,9 @@ class ChatCompletionsGateway:
     ) -> None:
         await self._client.__aexit__(exc_type, exc, traceback)
 
+    @trace.get_tracer(__name__).start_as_current_span(
+        "model_call", record_exception=False, set_status_on_exception=False
+    )
     async def generate(
         self, *, instructions: str, context: str, schema: dict[str, Any], expires_at: datetime
     ) -> str:

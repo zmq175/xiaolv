@@ -68,6 +68,8 @@ model_usage逐次记录角色、provider、model、输入/输出token、缓存�
 [INFO][2026-09-29T16:20:00.123+0800][participation.py:120] chat_decision||traceid=0123456789abcdef0123456789abcdef||spanid=0123456789abcdef||schema_version=1||turn_id=...||action=silence||reason_code=topic_not_relevant||__msg=当前话题无需参与，保持沉默
 ```
 
+实施选型为Python标准库logging Logger/Handler/RotatingFileHandler，OpenTelemetry提供trace/span；自定义Formatter仅渲染本节格式。当前已实现范围与限制见[日志运行方式](../logging.md)。
+
 统一logger接受event和结构化fields，自动获取时间、调用位置和trace上下文，业务不手拼分隔符。字段名仅允许a-z/0-9/下划线；解析先按||分段，再在第一个=处分割。值统一转义：反斜杠为\\，竖线为\u007C，换行为\n，回车为\r；解析器仅单次解码，避免原文中的字面转义二次执行。字段顺序固定基础字段在前，__msg最后。实现时用往返测试验证上述示例和注入字符串。
 
 traceid为32位十六进制，spanid为16位，使用OpenTelemetry上下文传播；后台任务新建trace并保留源trace关联，不把长期任务所有执行复用同一个span。INFO记录决策/完成摘要，WARNING记录可恢复退化，ERROR记录需要处理的失败，DEBUG限时开启。错误日志记录error_code、异常类型、必要堆栈，不包含密钥或完整模型Prompt。

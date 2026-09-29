@@ -1,12 +1,14 @@
 """Composition root for the native text service."""
 
 import asyncio
+import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+from opentelemetry import trace
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
@@ -16,6 +18,7 @@ from xiaolv.application.chat_worker import ChatWorker
 from xiaolv.application.delivery import DeliveryService
 from xiaolv.application.incoming import IncomingMessages
 from xiaolv.domain.model_budget import BudgetPolicy
+from xiaolv.domain.model_usage import ModelCallReport
 from xiaolv.models.chat_completions import ChatCompletionsGateway
 from xiaolv.models.conversation import ChatCompletionsModel
 from xiaolv.orchestration.text_runtime import TextRuntime
@@ -89,6 +92,7 @@ async def run_live(
                 model=_required(settings.model_id),
                 concurrency=settings.model_concurrency,
                 budget=budget,
+                usage_sink=_log_model_usage,
             ) as gateway,
             OneBotWebSocket(
                 _required(settings.onebot_url), _required(settings.onebot_token).get_secret_value()
@@ -138,6 +142,8 @@ async def run_live(
             while await worker.recover():
                 if stop.is_set():
                     return summary
+            with trace.get_tracer(__name__).start_as_current_span("service_ready"):
+                logging.getLogger(__name__).info("服务准备完成", extra={"event": "service_ready"})
             tasks = [asyncio.create_task(_receive(rpc, incoming, summary))]
             workers = [
                 asyncio.create_task(_work(worker, summary, stop))
@@ -194,7 +200,14 @@ async def _receive(rpc: OneBotWebSocket, incoming: IncomingMessages, summary: Li
     while True:
         frame = await rpc.next_event()
         try:
-            result = await incoming.receive(frame)
+            with trace.get_tracer(__name__).start_as_current_span(
+                "event_receive", record_exception=False, set_status_on_exception=False
+            ):
+                result = await incoming.receive(frame)
+                logging.getLogger(__name__).info(
+                    "入站事件处理完成",
+                    extra={"event": "event_received", "fields": {"status": result.status}},
+                )
         except IngressError:
             summary.invalid += 1
             continue
@@ -208,3 +221,19 @@ async def _work(worker: ChatWorker, summary: LiveSummary, stop: asyncio.Event) -
             await asyncio.sleep(0.1)
         else:
             summary.outcomes[outcome] = summary.outcomes.get(outcome, 0) + 1
+
+
+async def _log_model_usage(report: ModelCallReport) -> None:
+    fields = {
+        "call_id": report.call_id,
+        "status": report.status,
+        "usage_known": str(report.usage is not None).lower(),
+    }
+    if report.usage is not None:
+        fields.update(
+            input_tokens=str(report.usage.input_tokens),
+            output_tokens=str(report.usage.output_tokens),
+        )
+    logging.getLogger(__name__).info(
+        "模型调用已记账", extra={"event": "model_call", "fields": fields}
+    )

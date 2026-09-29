@@ -1,8 +1,11 @@
 """Native delivery through a swappable state ledger."""
 
 import asyncio
+import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
+
+from opentelemetry import trace
 
 from xiaolv.application.delivery_contracts import (
     DeliveryLedger,
@@ -36,10 +39,30 @@ class DeliveryService:
         self._ledger = ledger
 
     async def deliver(self, request: DeliveryRequest) -> DeliveryStatus:
-        if self._serial is not None:
-            async with self._serial:
-                return await self._deliver(request)
-        return await self._deliver(request)
+        with trace.get_tracer(__name__).start_as_current_span(
+            "delivery", record_exception=False, set_status_on_exception=False
+        ):
+            try:
+                if self._serial is not None:
+                    async with self._serial:
+                        result = await self._deliver(request)
+                else:
+                    result = await self._deliver(request)
+            except asyncio.CancelledError:
+                logging.getLogger(__name__).warning(
+                    "发送任务取消，请核对持久发送状态",
+                    extra={"event": "send_cancelled"},
+                )
+                raise
+            logging.getLogger(__name__).log(
+                logging.WARNING if result == "unknown" else logging.INFO,
+                "发送状态已确认" if result != "unknown" else "发送结果未知，不自动重发",
+                extra={
+                    "event": "send_unknown" if result == "unknown" else "outbox_transition",
+                    "fields": {"status": result},
+                },
+            )
+            return result
 
     async def _deliver(self, request: DeliveryRequest) -> DeliveryStatus:
         claim = await self._ledger.claim(request)

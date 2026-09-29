@@ -36,3 +36,17 @@ def test_invalid_live_configuration_exits_without_secrets_or_traceback():
     assert "do-not-print-this" not in result.stderr + result.stdout
     assert "Traceback" not in result.stderr
     assert result.stdout == ""
+
+
+def test_cli_uses_structured_stderr_logs_and_keeps_stdout_machine_readable():
+    from xiaolv.observability.log_format import parse_log
+
+    result = invoke()
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["mode"] == "local_fake_replay"
+    entries = [parse_log(line) for line in result.stderr.splitlines()]
+    assert "我也在听" not in result.stderr
+    entries = [entry for entry in entries if entry.event.startswith("service_")]
+    assert [entry.event for entry in entries] == ["service_started", "service_stopped"]
+    assert all(entry.traceid != "0" * 32 for entry in entries)
+    assert entries[0].traceid != entries[1].traceid
