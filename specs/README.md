@@ -16,6 +16,6 @@
 | [011 持久入站](011-persistent-inbox/spec.md) | Verified | PG去重、版本快照、隔离与故障回滚 |
 | [012 持久候选调度](012-durable-candidates/spec.md) | Verified | 合并、租约、SIGKILL恢复与旧worker隔离 |
 
-| [013 文字模型协议](013-chat-model/spec.md) | Implementing | 38个协议/配置用例；usage计费衔接待完成 |
+| [013 文字模型协议](013-chat-model/spec.md) | Verified | 51个协议/配置/usage审计用例；真实供应商待验收 |
 
 Verified仅表示该规格明示范围通过验证，不代表完整首版或真实QQ上线验收。每个规格包含spec.md、plan.md、evidence.md。开发流程见CONTRIBUTING.md。

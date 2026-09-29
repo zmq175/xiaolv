@@ -2,14 +2,17 @@
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
 from math import isfinite
 from types import TracebackType
-from typing import Any, Self
+from typing import Any, Literal, Self, cast
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 import httpx
+
+from xiaolv.domain.model_usage import ModelCallReport, TokenUsage
 
 
 class ChatCompletionsGateway:
@@ -24,6 +27,7 @@ class ChatCompletionsGateway:
         idle_seconds: float = 8,
         concurrency: int = 2,
         max_response_bytes: int = 65536,
+        usage_sink: Callable[[ModelCallReport], Awaitable[None]] | None = None,
     ) -> None:
         if not all(
             isinstance(value, str) and value.strip() for value in (base_url, api_key, model)
@@ -65,12 +69,14 @@ class ChatCompletionsGateway:
             transport=transport,
             trust_env=False,
             follow_redirects=False,
+            timeout=None,  # Stage and absolute deadlines cover connect, headers and body.
         )
         self._model = model
         self._first_token_seconds = first_token_seconds
         self._idle_seconds = idle_seconds
         self._slots = asyncio.Semaphore(concurrency)
         self._max_response_bytes = max_response_bytes
+        self._usage_sink = usage_sink
 
     async def __aenter__(self) -> Self:
         await self._client.__aenter__()
@@ -91,12 +97,45 @@ class ChatCompletionsGateway:
         if remaining <= 0:
             raise TimeoutError("model deadline expired")
         async with asyncio.timeout(remaining), self._slots:
-            return await self._generate(instructions=instructions, context=context, schema=schema)
+            started_at = datetime.now(UTC)
+            usage = None
+            status: Literal["completed", "failed", "cancelled"] = "failed"
+            try:
+                output, usage = await self._generate(
+                    instructions=instructions, context=context, schema=schema
+                )
+                status = "completed"
+                return output
+            except asyncio.CancelledError:
+                status = "cancelled"
+                raise
+            finally:
+                if self._usage_sink is not None:
+                    await asyncio.shield(
+                        self._record(
+                            ModelCallReport(
+                                uuid4().hex,
+                                self._model,
+                                started_at,
+                                datetime.now(UTC),
+                                status,
+                                usage,
+                            )
+                        )
+                    )
 
-    async def _generate(self, *, instructions: str, context: str, schema: dict[str, Any]) -> str:
+    async def _record(self, report: ModelCallReport) -> None:
+        if self._usage_sink is not None:
+            async with asyncio.timeout(2):
+                await self._usage_sink(report)
+
+    async def _generate(
+        self, *, instructions: str, context: str, schema: dict[str, Any]
+    ) -> tuple[str, TokenUsage | None]:
         body = {
             "model": self._model,
             "stream": True,
+            "stream_options": {"include_usage": True},
             "max_completion_tokens": 512,
             "messages": [
                 {"role": "system", "content": instructions},
@@ -110,6 +149,7 @@ class ChatCompletionsGateway:
         output = []
         finished = False
         done = False
+        usage = None
         async with (
             asyncio.timeout(self._first_token_seconds) as stage,
             self._client.stream("POST", "chat/completions", json=body) as response,
@@ -120,6 +160,8 @@ class ChatCompletionsGateway:
                     done = True
                     break
                 chunk = json.loads(data)
+                if finished and chunk.get("choices") == [] and chunk.get("usage") is not None:
+                    usage = _parse_usage(chunk["usage"])
                 if "error" in chunk:
                     raise ValueError("model stream reported failure")
                 for choice in chunk.get("choices", []):
@@ -139,7 +181,7 @@ class ChatCompletionsGateway:
                         finished = True
         if not done or not finished:
             raise ValueError("incomplete model stream")
-        return "".join(output)
+        return "".join(output), usage
 
     async def _events(self, response: httpx.Response) -> AsyncIterator[str]:
         buffer = b""
@@ -158,3 +200,21 @@ class ChatCompletionsGateway:
                     data_lines.clear()
                 elif line.startswith(b"data:"):
                     data_lines.append(line[5:].removeprefix(b" ").decode("utf-8"))
+
+
+def _parse_usage(raw: object) -> TokenUsage | None:
+    if not isinstance(raw, dict):
+        return None
+    counts = [raw.get(name) for name in ("prompt_tokens", "completion_tokens", "total_tokens")]
+    if any(type(value) is not int or not 0 <= value <= 2**63 - 1 for value in counts):
+        return None
+    prompt, completion, total = (cast(int, value) for value in counts)
+    if total != prompt + completion:
+        return None
+    details = raw.get("prompt_tokens_details")
+    if details is not None and not isinstance(details, dict):
+        return None
+    cached = details.get("cached_tokens") if details is not None else None
+    if cached is not None and (type(cached) is not int or not 0 <= cached <= prompt):
+        return None
+    return TokenUsage(prompt, completion, total, cached)

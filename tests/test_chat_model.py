@@ -585,3 +585,268 @@ async def test_cross_conversation_context_is_rejected_before_provider_request():
         assert await runner.run(event) == "model_error"
         assert calls == []
         assert platform.sent == []
+
+
+async def test_usage_log_reports_explicit_tokens_without_chat_content():
+    from dataclasses import asdict
+
+    reports = []
+    requests = []
+
+    async def record(report):
+        reports.append(report)
+
+    async def serve(request):
+        requests.append(json.loads(request.content))
+        response = stream_json({"action": "silence"})
+        usage = {
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 80,
+                "completion_tokens": 5,
+                "total_tokens": 85,
+                "prompt_tokens_details": {"cached_tokens": 32},
+            },
+        }
+        body = response.content.replace(
+            b"data: [DONE]", ("data: " + json.dumps(usage) + "\n\ndata: [DONE]").encode()
+        )
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body)
+
+    async with ChatCompletionsGateway(
+        base_url="https://model.example/v1",
+        api_key="synthetic-secret",
+        model="synthetic-model",
+        transport=httpx.MockTransport(serve),
+        usage_sink=record,
+    ) as gateway:
+        runner, _ = runtime(gateway)
+        assert await runner.run(candidate()) == "silence"
+    assert requests[0]["stream_options"]["include_usage"] is True
+    assert len(reports) == 1
+    report = reports[0]
+    assert report.status == "completed"
+    assert report.model == "synthetic-model"
+    assert report.usage.input_tokens == 80
+    assert report.usage.output_tokens == 5
+    assert report.usage.total_tokens == 85
+    assert report.usage.cached_input_tokens == 32
+    assert report.call_id and report.finished_at >= report.started_at
+    serialized = json.dumps(asdict(report), default=str)
+    assert "synthetic-secret" not in serialized
+    assert "你觉得呢" not in serialized
+
+
+@pytest.mark.parametrize(
+    "usage",
+    [
+        None,
+        {},
+        {"prompt_tokens": True, "completion_tokens": 1, "total_tokens": 2},
+        {"prompt_tokens": -1, "completion_tokens": 1, "total_tokens": 0},
+        {"prompt_tokens": 8, "completion_tokens": 1, "total_tokens": 999},
+        {
+            "prompt_tokens": 8,
+            "completion_tokens": 1,
+            "total_tokens": 9,
+            "prompt_tokens_details": {"cached_tokens": 10},
+        },
+        {"prompt_tokens": "8", "completion_tokens": 1, "total_tokens": 9},
+    ],
+)
+async def test_missing_or_invalid_usage_is_unknown_instead_of_zero(usage):
+    reports = []
+
+    async def record(report):
+        reports.append(report)
+
+    async def serve(request):
+        response = stream_json({"action": "silence"})
+        chunk = {"choices": [], "usage": usage}
+        body = response.content.replace(
+            b"data: [DONE]", ("data: " + json.dumps(chunk) + "\n\ndata: [DONE]").encode()
+        )
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body)
+
+    async with ChatCompletionsGateway(
+        base_url="https://model.example/v1",
+        api_key="synthetic",
+        model="synthetic",
+        transport=httpx.MockTransport(serve),
+        usage_sink=record,
+    ) as gateway:
+        runner, _ = runtime(gateway)
+        assert await runner.run(candidate()) == "silence"
+    assert len(reports) == 1
+    assert reports[0].status == "completed"
+    assert reports[0].usage is None
+
+
+async def test_failed_request_leaves_content_free_unknown_usage_audit():
+    from dataclasses import asdict
+
+    reports = []
+
+    async def record(report):
+        reports.append(report)
+
+    async def serve(request):
+        return httpx.Response(503, content=b"sensitive-provider-error")
+
+    async with ChatCompletionsGateway(
+        base_url="https://model.example/v1",
+        api_key="synthetic-secret",
+        model="synthetic",
+        transport=httpx.MockTransport(serve),
+        usage_sink=record,
+    ) as gateway:
+        runner, platform = runtime(gateway)
+        assert await runner.run(candidate()) == "model_error"
+        assert platform.sent == []
+    assert len(reports) == 1
+    assert reports[0].status == "failed"
+    assert reports[0].usage is None
+    assert "sensitive-provider-error" not in json.dumps(asdict(reports[0]), default=str)
+
+
+async def test_nonfinal_usage_does_not_pretend_to_be_complete_billing():
+    reports = []
+
+    async def record(report):
+        reports.append(report)
+
+    async def serve(request):
+        response = stream_json({"action": "silence"})
+        early = {
+            "choices": [],
+            "usage": {"prompt_tokens": 8, "completion_tokens": 0, "total_tokens": 8},
+        }
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=("data: " + json.dumps(early) + "\n\n").encode() + response.content,
+        )
+
+    async with ChatCompletionsGateway(
+        base_url="https://model.example/v1",
+        api_key="synthetic",
+        model="synthetic",
+        transport=httpx.MockTransport(serve),
+        usage_sink=record,
+    ) as gateway:
+        runner, _ = runtime(gateway)
+        assert await runner.run(candidate()) == "silence"
+    assert reports[0].usage is None
+
+
+async def test_cancelled_http_call_is_audited_but_waiting_call_is_not_billed():
+    import asyncio
+    from dataclasses import replace
+
+    reports = []
+    entered = asyncio.Event()
+
+    async def record(report):
+        reports.append(report)
+
+    async def serve(request):
+        entered.set()
+        await asyncio.Event().wait()
+
+    async with ChatCompletionsGateway(
+        base_url="https://model.example/v1",
+        api_key="synthetic",
+        model="synthetic",
+        transport=httpx.MockTransport(serve),
+        usage_sink=record,
+        concurrency=1,
+    ) as gateway:
+        runner, platform = runtime(gateway)
+        task = asyncio.create_task(runner.run(candidate()))
+        try:
+            await asyncio.wait_for(entered.wait(), 1)
+            queued = replace(
+                candidate(), event_id="queued", expires_at=clock() + timedelta(seconds=0.03)
+            )
+            assert await runner.run(queued) == "expired"
+            assert reports == []
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert len(reports) == 1
+            assert reports[0].status == "cancelled"
+            assert reports[0].usage is None
+            assert platform.sent == []
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_usage_sink_failure_stops_reply_delivery():
+    calls = []
+
+    async def record(report):
+        raise OSError("audit unavailable")
+
+    async def serve(request):
+        calls.append(request)
+        return stream_json({"action": "respond"} if len(calls) == 1 else {"text": "不能直接发出去"})
+
+    async with ChatCompletionsGateway(
+        base_url="https://model.example/v1",
+        api_key="synthetic",
+        model="synthetic",
+        transport=httpx.MockTransport(serve),
+        usage_sink=record,
+    ) as gateway:
+        runner, platform = runtime(gateway)
+        assert await runner.run(candidate()) == "model_error"
+        assert len(calls) == 1
+        assert platform.sent == []
+
+
+async def test_configured_first_content_wait_is_not_shortened_by_httpx_default():
+    import asyncio
+
+    finished = asyncio.Event()
+
+    async def serve(reader, writer):
+        try:
+            headers = await reader.readuntil(b"\r\n\r\n")
+            length = next(
+                int(line.split(b":", 1)[1])
+                for line in headers.split(b"\r\n")
+                if line.lower().startswith(b"content-length:")
+            )
+            await reader.readexactly(length)
+            await asyncio.sleep(5.15)
+            body = stream_json({"action": "silence"}).content
+            writer.write(
+                b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\nContent-Length: "
+                + str(len(body)).encode()
+                + b"\r\n\r\n"
+                + body
+            )
+            await writer.drain()
+        except ConnectionError:
+            pass
+        finally:
+            writer.close()
+            await writer.wait_closed()
+            finished.set()
+
+    server = await asyncio.start_server(serve, "127.0.0.1", 0)
+    async with server:
+        port = server.sockets[0].getsockname()[1]
+        try:
+            async with ChatCompletionsGateway(
+                base_url=f"http://127.0.0.1:{port}/v1",
+                api_key="synthetic",
+                model="synthetic",
+                first_token_seconds=7,
+            ) as gateway:
+                runner, platform = runtime(gateway)
+                assert await runner.run(candidate()) == "silence"
+                assert platform.sent == []
+        finally:
+            await asyncio.wait_for(finished.wait(), 8)
