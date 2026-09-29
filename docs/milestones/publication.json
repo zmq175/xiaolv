@@ -1,0 +1,19 @@
+{
+  "date": "2026-09-29",
+  "source_commit": "2af8366fefe50ce9b97dc58a9459969ddbcc09fe",
+  "folder_id": "AhktJJgDMqjI",
+  "folder_path": "小绿/技术方案/01 总体与实施",
+  "file_id": "AEBnsYIUjaUk",
+  "url": "https://docs.qq.com/aio/DQUVCbnNZSVVqYVVr",
+  "local_file": "2026-09-29-text-foundation.md",
+  "updated_cloud_documents": [
+    "ASrUXKaAirup",
+    "AKWovuKdPklN"
+  ],
+  "verification": "目录位置读回确认；阶段文档两页完整读回、六个章节及测试/CI证据核对；00/08直接读回确认v0.2及阶段文档显式网址。find未即时返回新段落，改用read核实；read不返回链接href，保留显式网址。",
+  "ci": {
+    "run_id": 36576189332,
+    "conclusion": "success"
+  },
+  "scope": "阶段摘要与00/08状态同步，增量规格正文以Git仓库为准。"
+}
