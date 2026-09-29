@@ -342,3 +342,54 @@ async def test_quote_survives_restart_and_cannot_be_replaced(database_url):
         assert platform.sent == [request]
     finally:
         await restarted_engine.dispose()
+
+
+async def test_competing_readonly_preparations_still_send_once(database_url):
+    import asyncio
+
+    fallback = RecordingPlatform()
+    prepared = RecordingPlatform()
+    ready = asyncio.Event()
+    calls = 0
+
+    async def prepare(request):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            ready.set()
+        await asyncio.wait_for(ready.wait(), 1)
+        return prepared
+
+    engines = [create_async_engine(database_url, hide_parameters=True) for _ in range(2)]
+    try:
+        services = [
+            DeliveryService(fallback, ledger=PostgresDeliveryLedger(engine), prepare=prepare)
+            for engine in engines
+        ]
+        request = outgoing(await services[0].start_turn("chat-1"))
+        results = await asyncio.gather(*(service.deliver(request) for service in services))
+        assert all(result in {"confirmed", "sending"} for result in results)
+        assert prepared.sent == [request]
+        assert fallback.sent == []
+    finally:
+        for engine in engines:
+            await engine.dispose()
+
+
+async def test_database_epoch_is_rechecked_after_preparation(database_url):
+    platform = RecordingPlatform()
+    engine = create_async_engine(database_url, hide_parameters=True)
+    try:
+        other = DeliveryService(platform, ledger=PostgresDeliveryLedger(engine))
+
+        async def prepare(request):
+            await other.start_turn(request.conversation_id)
+            return platform
+
+        service = DeliveryService(platform, ledger=PostgresDeliveryLedger(engine), prepare=prepare)
+        request = outgoing(await service.start_turn("chat-1"))
+        assert await service.deliver(request) == "superseded"
+        assert await other.status(request.outgoing_id) == "superseded"
+        assert platform.sent == []
+    finally:
+        await engine.dispose()

@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
 from opentelemetry import trace
@@ -27,9 +27,11 @@ class DeliveryService:
         current_epoch: Callable[[str], int] | None = None,
         *,
         ledger: DeliveryLedger | None = None,
+        prepare: Callable[[DeliveryRequest], Awaitable[PlatformSender]] | None = None,
     ) -> None:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._platform = platform
+        self._prepare = prepare
         self._serial: asyncio.Lock | None = None
         if ledger is None:
             if clock is None or current_epoch is None:
@@ -65,6 +67,20 @@ class DeliveryService:
             return result
 
     async def _deliver(self, request: DeliveryRequest) -> DeliveryStatus:
+        platform = self._platform
+        preparation_failed = False
+        if self._prepare is not None and await self._ledger.status(request.outgoing_id) is None:
+            remaining = (
+                request.expires_at.astimezone(UTC) - self._clock().astimezone(UTC)
+            ).total_seconds()
+            if remaining > 0:
+                try:
+                    async with asyncio.timeout(min(5, remaining)):
+                        platform = await self._prepare(request)
+                except Exception:  # noqa: BLE001 - preparation is strictly read-only
+                    preparation_failed = True
+            else:
+                preparation_failed = True
         claim = await self._ledger.claim(request)
         if claim.status is not None:
             return claim.status
@@ -75,10 +91,12 @@ class DeliveryService:
         ).total_seconds()
         if remaining <= 0:
             return await self._ledger.finish(request.outgoing_id, claim.token, "expired")
+        if preparation_failed:
+            return await self._ledger.finish(request.outgoing_id, claim.token, "not_sent")
         result: DeliveryStatus
         try:
             async with asyncio.timeout(min(10, remaining)):
-                result = await self._platform.send(request)
+                result = await platform.send(request)
         except asyncio.CancelledError:
             await asyncio.shield(self._ledger.finish(request.outgoing_id, claim.token, "unknown"))
             raise

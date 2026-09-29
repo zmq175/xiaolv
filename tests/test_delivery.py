@@ -195,3 +195,114 @@ async def test_platform_hang_is_bounded_and_retains_unknown_status():
     assert await service.status("out-1") == "unknown"
     assert await service.deliver(outgoing) == "unknown"
     assert platform.sent == [outgoing]
+
+
+async def test_preparation_expiry_prevents_native_send():
+    now = NOW
+    platform = RecordingPlatform()
+
+    async def prepare(outgoing):
+        nonlocal now
+        now = NOW + timedelta(minutes=30)
+        return platform
+
+    service = DeliveryService(platform, lambda: now, lambda _: 3, prepare=prepare)
+    assert await service.deliver(request()) == "expired"
+    assert await service.status("out-1") == "expired"
+    assert platform.sent == []
+
+
+async def test_preparation_failure_is_persisted_as_not_sent():
+    platform = RecordingPlatform()
+
+    async def prepare(outgoing):
+        raise ConnectionError("read-only lookup unavailable")
+
+    service = DeliveryService(platform, lambda: NOW, lambda _: 3, prepare=prepare)
+    assert await service.deliver(request()) == "not_sent"
+    assert await service.status("out-1") == "not_sent"
+    assert platform.sent == []
+
+
+async def test_preparation_hang_is_bounded_by_reply_deadline():
+    platform = RecordingPlatform()
+    stopped = asyncio.Event()
+
+    async def prepare(outgoing):
+        try:
+            await asyncio.Event().wait()
+        finally:
+            stopped.set()
+
+    service = DeliveryService(platform, lambda: datetime.now(UTC), lambda _: 3, prepare=prepare)
+    outgoing = request(expiry=datetime.now(UTC) + timedelta(milliseconds=50))
+    assert await asyncio.wait_for(service.deliver(outgoing), 1) == "expired"
+    assert stopped.is_set()
+    assert platform.sent == []
+
+
+async def test_duplicate_skips_preparation_but_still_checks_payload():
+    platform = RecordingPlatform()
+    calls = []
+
+    async def prepare(outgoing):
+        calls.append(outgoing)
+        return platform
+
+    service = DeliveryService(platform, lambda: NOW, lambda _: 3, prepare=prepare)
+    outgoing = request()
+    assert await service.deliver(outgoing) == "confirmed"
+    assert await service.deliver(outgoing) == "confirmed"
+    with pytest.raises(ValueError, match="conflict"):
+        await service.deliver(request(text="changed"))
+    assert calls == [outgoing]
+    assert platform.sent == [outgoing]
+
+
+@pytest.mark.parametrize("fails", [False, True])
+async def test_new_epoch_during_preparation_prevents_send(fails):
+    platform = RecordingPlatform()
+    epoch = 3
+
+    async def prepare(outgoing):
+        nonlocal epoch
+        epoch = 4
+        if fails:
+            raise ConnectionError("lookup interrupted")
+        return platform
+
+    service = DeliveryService(platform, lambda: NOW, lambda _: epoch, prepare=prepare)
+    assert await service.deliver(request()) == "superseded"
+    assert platform.sent == []
+
+
+async def test_cancelled_preparation_has_no_unknown_send_record():
+    platform = RecordingPlatform()
+    started = asyncio.Event()
+
+    async def prepare(outgoing):
+        started.set()
+        await asyncio.Event().wait()
+
+    service = DeliveryService(platform, lambda: NOW, lambda _: 3, prepare=prepare)
+    task = asyncio.create_task(service.deliver(request()))
+    await asyncio.wait_for(started.wait(), 1)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert await service.status("out-1") is None
+    assert platform.sent == []
+
+
+async def test_expired_request_skips_preparation():
+    platform = RecordingPlatform()
+    calls = []
+
+    async def prepare(outgoing):
+        calls.append(outgoing)
+        return platform
+
+    service = DeliveryService(platform, lambda: NOW, lambda _: 3, prepare=prepare)
+    assert await service.deliver(request(expiry=NOW)) == "expired"
+    assert calls == []
+    assert platform.sent == []
