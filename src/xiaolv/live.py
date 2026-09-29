@@ -23,6 +23,7 @@ from xiaolv.platforms.onebot import OneBotPreparation, OneBotSender, QQTarget
 from xiaolv.platforms.onebot_ingress import IngressError, OneBotIngress
 from xiaolv.platforms.onebot_ws import OneBotWebSocket
 from xiaolv.settings import ConfigError, Settings
+from xiaolv.storage.conversation_control import ConversationControl
 from xiaolv.storage.postgres_budget import PostgresModelBudget
 from xiaolv.storage.postgres_delivery import PostgresDeliveryLedger
 from xiaolv.storage.postgres_inbox import PostgresInbox
@@ -88,6 +89,12 @@ async def run_live(
     clock = lambda: datetime.now(UTC)
     try:
         await _check_schema(engine)
+        controls = ConversationControl(engine)
+        await controls.register(routes)
+
+        async def authorize(conversation_id: str) -> bool:
+            return conversation_id in routes and await controls.allowed(conversation_id)
+
         budget = PostgresModelBudget(engine, policy)
         capacity = PostgresModelCapacity(engine, "chat-model", settings.model_concurrency)
         try:
@@ -124,6 +131,7 @@ async def run_live(
                 OneBotSender(rpc, routes),
                 ledger=PostgresDeliveryLedger(engine, policy=settings.delivery_policy),
                 prepare=OneBotPreparation(rpc, routes),
+                authorize=authorize,
             )
             incoming = IncomingMessages(
                 OneBotIngress(self_id, settings.queue_max_age_seconds),

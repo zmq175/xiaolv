@@ -117,6 +117,16 @@ class PostgresDeliveryLedger:
             terminal: DeliveryStatus | None = None
             if decision.reason in ("expired", "superseded"):
                 terminal = decision.reason
+            enabled = (
+                await connection.execute(
+                    text(
+                        "SELECT enabled FROM app.conversation_controls WHERE conversation_id = :id"
+                    ),
+                    {"id": request.conversation_id},
+                )
+            ).scalar_one_or_none()
+            if terminal is None and enabled is False:
+                terminal = "not_sent"
             if terminal is None and not await self._quota_available(
                 connection, request.conversation_id, now
             ):

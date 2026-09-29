@@ -42,4 +42,6 @@
 | [037 上下文token预算](037-context-budget/spec.md) | Verified | 现成分词、分阶段预算、完整触发/旧引用保留、PG限量读取与在线验证 |
 | [038 执行授权检查点](038-execution-authorization/spec.md) | Verified | 模型阶段和发送前核验、失败关闭与取消；持久管理策略尚未接线 |
 
+| [039 持久会话控制](039-conversation-control/spec.md) | In progress | 管理HTTP、持久停用与旧回合失效、在线权限接线；浏览器开关与竞争专项待完成 |
+
 Verified仅表示该规格明示范围通过验证，不代表完整首版或真实QQ上线验收。每个规格包含spec.md、plan.md、evidence.md。开发流程见CONTRIBUTING.md。

@@ -20,6 +20,7 @@ from starlette.middleware.base import RequestResponseEndpoint
 from starlette.staticfiles import StaticFiles
 
 from xiaolv.domain.bot_profile import BotProfile
+from xiaolv.storage.conversation_control import ConversationControl
 from xiaolv.storage.profile_publication import ProfilePublication, PublicationError
 
 
@@ -64,6 +65,10 @@ class _ProfileWrite(BaseModel):
     expected_version: int = Field(ge=0)
 
 
+class _ConversationWrite(_ProfileWrite):
+    enabled: bool
+
+
 class _DraftWrite(_ProfileWrite):
     profile: BotProfile
 
@@ -84,6 +89,7 @@ def create_admin_app(
     password_slots = anyio.CapacityLimiter(2)
     credential_version = _digest(config.password_hash)
     profiles = ProfilePublication(engine)
+    conversations = ConversationControl(engine)
 
     @app.exception_handler(PublicationError)
     async def publication_error(request: Request, error: PublicationError) -> JSONResponse:
@@ -236,6 +242,26 @@ def create_admin_app(
         if re.fullmatch(r"[A-Za-z0-9_-]{1,128}", key) is None:
             raise HTTPException(422, "invalid_idempotency_key")
         return key
+
+    @app.get("/admin/api/conversations")
+    async def list_conversations(
+        request: Request,
+        limit: int = Query(20, ge=1, le=50),
+        after: str = Query("", max_length=256),
+    ) -> JSONResponse:
+        await session(request)
+        return JSONResponse(await conversations.list(limit, after))
+
+    @app.put("/admin/api/conversations/{conversation_id}")
+    async def change_conversation(
+        conversation_id: str, body: _ConversationWrite, request: Request
+    ) -> JSONResponse:
+        key = await require_write(request)
+        return JSONResponse(
+            await conversations.change(
+                conversation_id, body.enabled, body.expected_version, key, credential_version
+            )
+        )
 
     @app.get("/admin/api/profile")
     async def current_profile(request: Request) -> JSONResponse:

@@ -937,3 +937,75 @@ async def test_missing_tokenizer_assets_fail_before_platform_connection(
         await asyncio.wait_for(run_live(settings(database_url, services), asyncio.Event()), 3)
     assert services.model_requests == []
     assert services.sent == []
+
+
+async def test_admin_disabled_conversation_skips_models_after_live_restart(database_url, services):
+    from pwdlib import PasswordHash
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from test_admin_auth import PASSWORD, client
+
+    from xiaolv.live import LiveSummary
+    from xiaolv.storage.conversation_control import ConversationControl
+
+    engine = create_async_engine(database_url, hide_parameters=True)
+    try:
+        await ConversationControl(engine).register(["qq:10000:group:20000"])
+        async with client(engine, PasswordHash.recommended().hash(PASSWORD)) as http:
+            login = await http.post("/admin/api/login", json={"password": PASSWORD})
+            http.headers["X-CSRF-Token"] = login.json()["csrf_token"]
+            response = await http.put(
+                "/admin/api/conversations/qq:10000:group:20000",
+                json={"enabled": False, "expected_version": 0},
+                headers={"Idempotency-Key": "stop-live"},
+            )
+            assert response.status_code == 200
+    finally:
+        await engine.dispose()
+    stop = asyncio.Event()
+    stats = LiveSummary()
+    task = asyncio.create_task(run_live(settings(database_url, services), stop, statistics=stats))
+    try:
+        await until(lambda: bool(stats.outcomes), task)
+        assert stats.outcomes == {"permission_denied": 1}
+        assert services.model_requests == []
+        assert services.sent == []
+    finally:
+        stop.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_admin_stop_during_model_decision_prevents_followup_call(database_url, services):
+    from pwdlib import PasswordHash
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from test_admin_auth import PASSWORD, client
+
+    from xiaolv.live import LiveSummary
+
+    services.hold = asyncio.Event()
+    stop = asyncio.Event()
+    stats = LiveSummary()
+    task = asyncio.create_task(run_live(settings(database_url, services), stop, statistics=stats))
+    engine = create_async_engine(database_url, hide_parameters=True)
+    try:
+        await asyncio.wait_for(services.model_started.wait(), 5)
+        async with client(engine, PasswordHash.recommended().hash(PASSWORD)) as http:
+            login = await http.post("/admin/api/login", json={"password": PASSWORD})
+            http.headers["X-CSRF-Token"] = login.json()["csrf_token"]
+            response = await http.put(
+                "/admin/api/conversations/qq:10000:group:20000",
+                json={"enabled": False, "expected_version": 0},
+                headers={"Idempotency-Key": "stop-running"},
+            )
+            assert response.status_code == 200
+        services.hold.set()
+        await until(lambda: bool(stats.outcomes), task)
+        assert stats.outcomes == {"permission_denied": 1}
+        assert len(services.model_requests) == 1
+        assert services.sent == []
+    finally:
+        services.hold.set()
+        stop.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        await engine.dispose()
