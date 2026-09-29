@@ -2,9 +2,11 @@
 
 import asyncio
 import logging
+from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
+import httpx
 from opentelemetry import trace
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
@@ -13,21 +15,27 @@ from websockets.exceptions import WebSocketException
 from xiaolv.application.chat_worker import ChatWorker
 from xiaolv.application.delivery import DeliveryService
 from xiaolv.application.incoming import IncomingMessages
+from xiaolv.application.speech_execution import SpeechExecution
+from xiaolv.application.voice_dispatch import VoiceDispatch
 from xiaolv.domain.model_budget import BudgetPolicy
 from xiaolv.domain.model_usage import ModelCallReport
+from xiaolv.domain.speech import SpeechPolicy
 from xiaolv.models.chat_completions import ChatCompletionsGateway
 from xiaolv.models.conversation import ChatCompletionsModel
+from xiaolv.models.fish_audio import FishAudioProvider
 from xiaolv.models.tokenizer import load_tokenizer
 from xiaolv.orchestration.text_runtime import TextRuntime
 from xiaolv.platforms.onebot import OneBotPreparation, OneBotSender, QQTarget
 from xiaolv.platforms.onebot_ingress import IngressError, OneBotIngress
 from xiaolv.platforms.onebot_ws import OneBotWebSocket
-from xiaolv.settings import ConfigError, Settings
+from xiaolv.settings import ConfigError, Settings, SpeechSettings
+from xiaolv.storage.audio_artifacts import LocalAudioArtifacts
 from xiaolv.storage.conversation_control import ConversationControl
 from xiaolv.storage.postgres_budget import PostgresModelBudget
 from xiaolv.storage.postgres_delivery import PostgresDeliveryLedger
 from xiaolv.storage.postgres_inbox import PostgresInbox
 from xiaolv.storage.postgres_model_capacity import PostgresModelCapacity
+from xiaolv.storage.postgres_speech import PostgresSpeechLedger
 from xiaolv.storage.postgres_turns import CandidatePolicy, PostgresTurns
 from xiaolv.storage.published_profile import PublishedProfiles
 from xiaolv.storage.schema import schema_is_current
@@ -53,7 +61,11 @@ def _required[T](value: T | None) -> T:
 
 
 async def run_live(
-    settings: Settings, stop: asyncio.Event, *, statistics: LiveSummary | None = None
+    settings: Settings,
+    stop: asyncio.Event,
+    *,
+    statistics: LiveSummary | None = None,
+    speech_transport: httpx.AsyncBaseTransport | None = None,
 ) -> LiveSummary:
     if settings.mode != "live":
         raise ConfigError("live mode is required")
@@ -102,6 +114,7 @@ async def run_live(
         except ValueError:
             raise ConfigError("shared model capacity configuration conflict") from None
         async with (
+            AsyncExitStack() as resources,
             ChatCompletionsGateway(
                 base_url=_required(settings.model_base_url),
                 api_key=_required(settings.model_api_key).get_secret_value(),
@@ -127,12 +140,61 @@ async def run_live(
                 raise LiveRuntimeError("onebot_login_invalid")
             if data["user_id"] != self_id:
                 raise LiveRuntimeError("onebot_account_mismatch")
+            artifacts = None
+            speech_provider = None
+            speech_capacity = None
+            if settings.speech is not None:
+                speech = settings.speech
+                artifacts = LocalAudioArtifacts(
+                    speech.artifact_root,
+                    speech.max_audio_bytes,
+                    max_total_bytes=speech.max_total_bytes,
+                )
+                speech_capacity = PostgresModelCapacity(engine, "speech-model", speech.concurrency)
+                try:
+                    await speech_capacity.initialize()
+                except ValueError:
+                    raise ConfigError("shared speech capacity configuration conflict") from None
+                speech_provider = await resources.enter_async_context(
+                    FishAudioProvider(
+                        api_key=speech.api_key.get_secret_value(),
+                        model=speech.model,
+                        voice_profiles=speech.voices,
+                        transport=speech_transport,
+                        max_audio_bytes=speech.max_audio_bytes,
+                        max_duration_seconds=speech.max_duration_seconds,
+                    )
+                )
             delivery = DeliveryService(
                 OneBotSender(rpc, routes),
                 ledger=PostgresDeliveryLedger(engine, policy=settings.delivery_policy),
-                prepare=OneBotPreparation(rpc, routes),
+                prepare=OneBotPreparation(rpc, routes, artifacts=artifacts),
                 authorize=authorize,
             )
+            voice_delivery = None
+            if (
+                settings.speech is not None
+                and artifacts is not None
+                and speech_provider is not None
+            ):
+                speech = settings.speech
+                voice_delivery = SpeechExecution(
+                    PostgresSpeechLedger(
+                        engine,
+                        SpeechPolicy(
+                            "external",
+                            "fish",
+                            speech.model,
+                            speech.price_version,
+                            speech.voice_binding_version,
+                            _required(settings.monthly_external_budget_cny),
+                            speech.reservation_cny,
+                        ),
+                    ),
+                    speech_provider,
+                    VoiceDispatch(artifacts, delivery),
+                    capacity=speech_capacity,
+                )
             incoming = IncomingMessages(
                 OneBotIngress(self_id, settings.queue_max_age_seconds),
                 PostgresInbox(
@@ -158,11 +220,13 @@ async def run_live(
                         ],
                         quote_conversations=list(routes),
                         ordered_conversations=list(routes),
+                        voice_profiles=settings.speech.conversations if settings.speech else None,
                     ),
                     delivery,
                     clock,
                     max_chars=settings.max_reply_chars,
                     profile_loader=PublishedProfiles(engine, settings.bot_profile).load,
+                    voice_delivery=voice_delivery,
                 ),
             )
             await delivery.recover()
@@ -177,6 +241,8 @@ async def run_live(
                 for _ in range(settings.model_concurrency)
             ]
             tasks.extend(workers)
+            if artifacts is not None and settings.speech is not None:
+                tasks.append(asyncio.create_task(_maintain_audio(artifacts, settings.speech, stop)))
             stopping = asyncio.create_task(stop.wait())
             try:
                 done, _ = await asyncio.wait(
@@ -255,3 +321,26 @@ async def _log_model_usage(report: ModelCallReport) -> None:
     logging.getLogger(__name__).info(
         "模型调用已记账", extra={"event": "model_call", "fields": fields}
     )
+
+
+async def _maintain_audio(
+    artifacts: LocalAudioArtifacts, settings: SpeechSettings, stop: asyncio.Event
+) -> None:
+    while not stop.is_set():
+        try:
+            removed = await artifacts.cleanup(
+                before=datetime.now(UTC) - timedelta(seconds=settings.retention_seconds)
+            )
+            if removed:
+                logging.getLogger(__name__).info(
+                    "过期音频已清理",
+                    extra={"event": "audio_cleanup", "fields": {"removed": str(removed)}},
+                )
+        except (OSError, ValueError):
+            logging.getLogger(__name__).warning(
+                "音频清理失败，容量限制继续生效", extra={"event": "audio_cleanup_failed"}
+            )
+        try:
+            await asyncio.wait_for(stop.wait(), settings.cleanup_interval_seconds)
+        except TimeoutError:
+            pass

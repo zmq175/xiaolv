@@ -41,6 +41,7 @@ class Services:
         self.message_queries = []
         self.drop_quote = False
         self.parts = None
+        self.voice = None
 
     async def onebot(self, ws):
         self.connection = ws
@@ -145,6 +146,11 @@ class Services:
                     ],
                     "reply_to": self.reply_to,
                 }
+            if "voice" in properties:
+                value["voice"] = self.voice
+                if self.voice is not None:
+                    value["parts"] = []
+                    value["reply_to"] = None
             chunks = [
                 {
                     "choices": [
@@ -1009,3 +1015,146 @@ async def test_admin_stop_during_model_decision_prevents_followup_call(database_
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
         await engine.dispose()
+
+
+@pytest.mark.parametrize("choice", ["voice", "text", "cleanup_failure"])
+async def test_online_voice_uses_official_sdk_and_native_record(
+    database_url, services, tmp_path, caplog, choice
+):
+    import base64
+
+    import httpx
+    import ormsgpack
+    from test_fish_voice import wav_sample
+
+    services.voice = {"speech_text": "晚安", "voice_profile": "warm"} if choice == "voice" else None
+    if choice == "cleanup_failure":
+        tmp_path = tmp_path / "private-audio-path"
+        tmp_path.write_text("synthetic unavailable directory")
+    audio, calls = wav_sample(), []
+
+    async def respond(request):
+        calls.append(ormsgpack.unpackb(request.content))
+        return httpx.Response(200, content=audio)
+
+    config = settings(
+        database_url,
+        services,
+        XIAOLV_SPEECH=json.dumps(
+            {
+                "api_key": "synthetic-tts-secret",
+                "model": "explicit-model",
+                "voice_binding_version": "voice-v1",
+                "price_version": "price-v1",
+                "reservation_cny": "0.1",
+                "voices": {"warm": "supplier-reference"},
+                "conversations": {"qq:10000:group:20000": ["warm"]},
+                "artifact_root": str(tmp_path),
+            }
+        ),
+    )
+    stop = asyncio.Event()
+    task = asyncio.create_task(
+        run_live(config, stop, speech_transport=httpx.MockTransport(respond))
+    )
+    ready = asyncio.create_task(services.delivered.wait())
+    try:
+        done, _ = await asyncio.wait({task, ready}, timeout=5, return_when=asyncio.FIRST_COMPLETED)
+        if task in done:
+            await task
+        assert ready in done
+        stop.set()
+        summary = await asyncio.wait_for(task, 6)
+        assert summary.outcomes == {"confirmed": 1}
+        if choice == "voice":
+            assert len(calls) == 1
+            assert calls[0]["text"] == "晚安"
+            assert calls[0]["reference_id"] == "supplier-reference"
+            assert services.sent == [
+                {
+                    "group_id": 20000,
+                    "message": [
+                        {
+                            "type": "record",
+                            "data": {"file": "base64://" + base64.b64encode(audio).decode("ascii")},
+                        }
+                    ],
+                }
+            ]
+        else:
+            assert calls == []
+            assert services.sent == [
+                {
+                    "group_id": 20000,
+                    "message": [{"type": "text", "data": {"text": "我觉得先试一下。"}}],
+                }
+            ]
+        if choice == "cleanup_failure":
+            assert any(
+                getattr(record, "event", "") == "audio_cleanup_failed" for record in caplog.records
+            )
+            assert "private-audio-path" not in caplog.text
+            assert "synthetic-tts-secret" not in caplog.text
+    finally:
+        stop.set()
+        task.cancel()
+        ready.cancel()
+        await asyncio.gather(task, ready, return_exceptions=True)
+
+
+async def test_online_audio_cleanup_runs_periodically_and_stops_with_service(
+    database_url, services, tmp_path, caplog
+):
+    import logging
+
+    from test_fish_voice import wav_sample
+
+    from xiaolv.storage.audio_artifacts import LocalAudioArtifacts
+
+    services.frames = []
+    config = settings(
+        database_url,
+        services,
+        XIAOLV_CHAT_TTL_SECONDS="0.05",
+        XIAOLV_QUEUE_MAX_AGE_SECONDS="0.01",
+        XIAOLV_SPEECH=json.dumps(
+            {
+                "api_key": "synthetic",
+                "model": "explicit-model",
+                "voice_binding_version": "v1",
+                "price_version": "p1",
+                "reservation_cny": "0.1",
+                "voices": {"warm": "reference"},
+                "conversations": {"qq:10000:group:20000": ["warm"]},
+                "artifact_root": str(tmp_path),
+                "retention_seconds": 0.1,
+                "cleanup_interval_seconds": 0.03,
+            }
+        ),
+    )
+    caplog.set_level(logging.INFO, logger="xiaolv.live")
+    stop = asyncio.Event()
+    task = asyncio.create_task(run_live(config, stop))
+    try:
+        await asyncio.wait_for(services.received.wait(), 3)
+        await LocalAudioArtifacts(tmp_path).save("qq:10000:group:20000", wav_sample())
+
+        async def cleaned():
+            while not any(
+                getattr(record, "event", "") == "audio_cleanup" and record.fields["removed"] == "1"
+                for record in caplog.records
+            ):
+                await asyncio.sleep(0.01)
+
+        await asyncio.wait_for(cleaned(), 1)
+        stop.set()
+        await asyncio.wait_for(task, 6)
+        count = len(caplog.records)
+        await asyncio.sleep(0.1)
+        assert len(caplog.records) == count
+        assert services.sent == []
+        assert services.model_requests == []
+    finally:
+        stop.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)

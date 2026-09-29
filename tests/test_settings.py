@@ -283,3 +283,59 @@ def test_context_budget_configuration_is_separate_from_history_count():
         load_settings({"XIAOLV_CONTEXT_POLICY": '{"history_messages":501}'})
     with pytest.raises(ConfigError, match="context_policy"):
         load_settings({"XIAOLV_CONTEXT_POLICY": '{"window_tokens":1024,"safety_tokens":900}'})
+
+
+def speech_environment(tmp_path):
+    import json
+
+    env = live_environment()
+    env["XIAOLV_ENABLED_GROUP_IDS"] = "[20000]"
+    env["XIAOLV_SPEECH"] = json.dumps(
+        {
+            "api_key": "synthetic-tts-secret",
+            "model": "explicit-model",
+            "voice_binding_version": "voice-v1",
+            "price_version": "price-v1",
+            "reservation_cny": "0.1",
+            "voices": {"warm": "supplier-reference"},
+            "conversations": {"qq:10000:group:20000": ["warm"]},
+            "artifact_root": str(tmp_path),
+        }
+    )
+    return env
+
+
+def test_voice_startup_config_is_explicit_and_redacts_credentials(tmp_path):
+    assert load_settings({}).speech is None
+    settings = load_settings(speech_environment(tmp_path))
+    assert settings.speech.model == "explicit-model"
+    assert settings.speech.conversations == {"qq:10000:group:20000": ("warm",)}
+    assert settings.speech.retention_seconds > settings.chat_ttl_seconds
+    assert "synthetic-tts-secret" not in repr(settings) + settings.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"api_key": "   "},
+        {"model": "   "},
+        {"reservation_cny": "0"},
+        {"conversations": {"qq:10000:group:99999": ["warm"]}},
+        {"conversations": {"qq:10000:group:20000": ["unknown"]}},
+        {"retention_seconds": 45},
+        {"voices": {"warm": " "}},
+        {"artifact_root": "relative/path"},
+    ],
+)
+def test_invalid_voice_binding_fails_before_service_start(tmp_path, change):
+    import json
+
+    from xiaolv.settings import ConfigError
+
+    env = speech_environment(tmp_path)
+    speech = json.loads(env["XIAOLV_SPEECH"])
+    speech.update(change)
+    env["XIAOLV_SPEECH"] = json.dumps(speech)
+    with pytest.raises(ConfigError) as raised:
+        load_settings(env)
+    assert "synthetic-tts-secret" not in str(raised.value)

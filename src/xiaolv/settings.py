@@ -21,9 +21,56 @@ class ConfigError(ValueError):
     """Invalid startup configuration; messages contain field names only."""
 
 
+class SpeechSettings(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
+
+    api_key: SecretStr
+    model: str = Field(min_length=1)
+    voice_binding_version: str = Field(min_length=1)
+    price_version: str = Field(min_length=1)
+    reservation_cny: Money
+    voices: dict[str, str]
+    conversations: dict[str, tuple[str, ...]]
+    artifact_root: Path
+    max_audio_bytes: int = Field(default=4 * 1024 * 1024, gt=0)
+    max_total_bytes: int = Field(default=256 * 1024 * 1024, gt=0)
+    max_duration_seconds: float = Field(default=20, gt=0, allow_inf_nan=False)
+    retention_seconds: float = Field(default=86400, gt=0, allow_inf_nan=False)
+    cleanup_interval_seconds: float = Field(default=600, gt=0, allow_inf_nan=False)
+    concurrency: int = Field(default=1, gt=0)
+
+    @model_validator(mode="after")
+    def validate_binding(self) -> Self:
+        if (
+            not all(
+                value.strip()
+                for value in (
+                    self.api_key.get_secret_value(),
+                    self.model,
+                    self.voice_binding_version,
+                    self.price_version,
+                )
+            )
+            or self.reservation_cny <= 0
+            or not self.artifact_root.is_absolute()
+            or not self.voices
+            or not self.conversations
+            or any(not key.strip() or not value.strip() for key, value in self.voices.items())
+            or any(
+                not names
+                or any(name not in self.voices for name in names)
+                or len(names) != len(set(names))
+                for names in self.conversations.values()
+            )
+        ):
+            raise ValueError("invalid speech binding")
+        return self
+
+
 class Settings(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
 
+    speech: SpeechSettings | None = None
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     log_file: Path | None = None
     log_max_bytes: int = Field(default=20 * 1024 * 1024, ge=1024)
@@ -57,6 +104,16 @@ class Settings(BaseModel):
     def validate_limits(self) -> Self:
         if self.queue_max_age_seconds > self.chat_ttl_seconds:
             raise ValueError("queue_max_age_seconds exceeds chat_ttl_seconds")
+        if self.speech is not None:
+            routes = {f"qq:{self.qq_self_id}:group:{id}" for id in self.enabled_group_ids}
+            routes.update(f"qq:{self.qq_self_id}:private:{id}" for id in self.enabled_private_ids)
+            if (
+                self.speech.retention_seconds <= self.chat_ttl_seconds
+                or not set(self.speech.conversations).issubset(routes)
+                or self.monthly_external_budget_cny is None
+                or self.speech.reservation_cny > self.monthly_external_budget_cny
+            ):
+                raise ValueError("invalid speech scope or limits")
         if self.mode == "live":
             for name in (
                 "database_url",
@@ -124,6 +181,7 @@ def load_settings(environ: Mapping[str, str]) -> Settings:
         "bot_profile",
         "delivery_policy",
         "context_policy",
+        "speech",
     ):
         key = "XIAOLV_" + name.upper()
         if key in environ:
