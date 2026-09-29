@@ -71,6 +71,7 @@ class Settings(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
 
     speech: SpeechSettings | None = None
+    speech_recovery_interval_seconds: float = Field(default=30, gt=0, le=3600, allow_inf_nan=False)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     log_file: Path | None = None
     log_max_bytes: int = Field(default=20 * 1024 * 1024, ge=1024)

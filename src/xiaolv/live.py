@@ -39,6 +39,7 @@ from xiaolv.storage.postgres_speech import PostgresSpeechLedger
 from xiaolv.storage.postgres_turns import CandidatePolicy, PostgresTurns
 from xiaolv.storage.published_profile import PublishedProfiles
 from xiaolv.storage.schema import schema_is_current
+from xiaolv.storage.speech_recovery import recover_speech_calls
 
 
 class LiveRuntimeError(RuntimeError):
@@ -241,6 +242,11 @@ async def run_live(
                 for _ in range(settings.model_concurrency)
             ]
             tasks.extend(workers)
+            tasks.append(
+                asyncio.create_task(
+                    _maintain_speech_calls(engine, settings.speech_recovery_interval_seconds, stop)
+                )
+            )
             if artifacts is not None and settings.speech is not None:
                 tasks.append(asyncio.create_task(_maintain_audio(artifacts, settings.speech, stop)))
             stopping = asyncio.create_task(stop.wait())
@@ -342,5 +348,24 @@ async def _maintain_audio(
             )
         try:
             await asyncio.wait_for(stop.wait(), settings.cleanup_interval_seconds)
+        except TimeoutError:
+            pass
+
+
+async def _maintain_speech_calls(engine: AsyncEngine, interval: float, stop: asyncio.Event) -> None:
+    while not stop.is_set():
+        try:
+            count = await recover_speech_calls(engine)
+            if count:
+                logging.getLogger(__name__).warning(
+                    "过期语音调用已标记未知，费用预留保留",
+                    extra={"event": "speech_recovered", "fields": {"count": str(count)}},
+                )
+        except SQLAlchemyError:
+            logging.getLogger(__name__).warning(
+                "语音审计恢复失败，等待下个周期", extra={"event": "speech_recovery_failed"}
+            )
+        try:
+            await asyncio.wait_for(stop.wait(), interval)
         except TimeoutError:
             pass
