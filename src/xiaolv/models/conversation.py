@@ -1,6 +1,7 @@
 """Conversation behavior over a replaceable structured generation boundary."""
 
 import json
+from collections.abc import Collection
 from datetime import datetime
 from importlib.resources import files
 from typing import Any, Literal, Protocol
@@ -8,6 +9,7 @@ from typing import Any, Literal, Protocol
 from pydantic import BaseModel, ConfigDict
 
 from xiaolv.domain.bot_profile import BotProfile
+from xiaolv.domain.text_reply import TextReply
 from xiaolv.orchestration.text_runtime import ConversationCandidate
 
 
@@ -27,6 +29,10 @@ class _Reply(BaseModel):
     text: str
 
 
+class _MentionReply(_Reply):
+    mentions: list[str]
+
+
 class ChatCompletionsModel:
     def __init__(
         self,
@@ -34,12 +40,14 @@ class ChatCompletionsModel:
         *,
         profile: BotProfile | None = None,
         max_reply_chars: int = 200,
+        mention_conversations: Collection[str] = (),
     ) -> None:
         if type(max_reply_chars) is not int or max_reply_chars <= 0:
             raise ValueError("invalid reply length")
         self._generator = generator
         self._profile = profile if profile is not None else BotProfile()
         self._max_reply_chars = max_reply_chars
+        self._mention_conversations = frozenset(mention_conversations)
 
     def _instructions(self, stage: str) -> str:
         template = files("xiaolv.prompts").joinpath(stage + ".txt").read_text(encoding="utf-8")
@@ -59,17 +67,22 @@ class ChatCompletionsModel:
         )
         return _Decision.model_validate_json(result).action
 
-    async def reply(self, candidate: ConversationCandidate) -> str:
+    async def reply(self, candidate: ConversationCandidate) -> str | TextReply:
+        context = self._context(candidate)
+        enabled = candidate.conversation_id in self._mention_conversations
         result = await self._generator.generate(
             instructions=self._instructions("reply"),
-            context=self._context(candidate),
-            schema=_Reply.model_json_schema(),
+            context=context,
+            schema=(_MentionReply if enabled else _Reply).model_json_schema(),
             expires_at=candidate.expires_at,
         )
-        return _Reply.model_validate_json(result).text
+        if not enabled:
+            return _Reply.model_validate_json(result).text
+        reply = _MentionReply.model_validate_json(result)
+        members = {item["member_ref"]: item["account"] for item in json.loads(context)["messages"]}
+        return TextReply(reply.text, tuple(dict.fromkeys(members[ref] for ref in reply.mentions)))
 
-    @staticmethod
-    def _context(candidate: ConversationCandidate) -> str:
+    def _context(self, candidate: ConversationCandidate) -> str:
         if any(
             item.conversation_id != candidate.conversation_id for item in candidate.context.messages
         ):
@@ -80,16 +93,18 @@ class ChatCompletionsModel:
             "target_truncated": len(candidate.text) > 1000,
             "messages": messages,
         }
-        for item in reversed(candidate.context.messages[-30:]):
+        for index, item in enumerate(reversed(candidate.context.messages[-30:]), 1):
             messages.insert(
                 0,
                 {
-                    "account": item.sender_account_id[:128],
+                    "account": item.sender_account_id,
                     "name": item.display_name[:128],
                     "text": item.text[:1000],
                     "truncated": len(item.text) > 1000,
                 },
             )
+            if candidate.conversation_id in self._mention_conversations:
+                messages[0]["member_ref"] = f"member_{index}"
             if len(json.dumps(payload, ensure_ascii=False)) > 12000:
                 messages.pop(0)
                 break

@@ -57,6 +57,35 @@ async def test_model_reply_reaches_native_delivery():
     assert platform.sent[0].conversation_id == "chat-1"
 
 
+async def test_model_cannot_notify_an_account_absent_from_conversation_context():
+    from xiaolv.domain.text_reply import TextReply
+
+    class UnknownMember(ReplyModel):
+        async def reply(self, candidate):
+            return TextReply("你好", ("qq:99999",))
+
+    runtime, platform = setup(UnknownMember())
+    assert await runtime.run(candidate()) == "model_error"
+    assert platform.sent == []
+
+
+async def test_member_in_other_conversation_is_not_a_valid_notification_target():
+    from dataclasses import replace
+
+    from xiaolv.domain.chat_event import ChatEvent, ConversationContext
+    from xiaolv.domain.text_reply import TextReply
+
+    class CrossScopeMember(ReplyModel):
+        async def reply(self, candidate):
+            return TextReply("你好", ("qq:99999",))
+
+    other = ChatEvent("other-chat", "qq:99999", "m-1", "其他群消息", "群友", NOW, NOW, NOW)
+    runtime, platform = setup(CrossScopeMember())
+    event = replace(candidate(), context=ConversationContext(1, (other,)))
+    assert await runtime.run(event) == "model_error"
+    assert platform.sent == []
+
+
 async def test_expired_candidate_does_not_call_model():
     from dataclasses import replace
 

@@ -28,5 +28,6 @@
 | [019 原生引用回复](019-native-quotes/spec.md) | Verified | 会话内可信引用映射、reply 段、@组合与PG幂等；模型在线接线待完成 |
 | [020 发送准备](020-delivery-preparation/spec.md) | Verified | 只读准备、期限与epoch复核、失败/取消语义和PG并发认领 |
 | [021 动态成员核实](021-live-member-resolution/spec.md) | Verified | 当前群成员列表、严格响应校验、原生@与在线出口接线；模型选择待完成 |
+| [022 模型成员选择](022-model-mentions/spec.md) | Verified | 模型member_ref选择、范围复核、动态校验与在线原生@；真实QQ待验收 |
 
 Verified仅表示该规格明示范围通过验证，不代表完整首版或真实QQ上线验收。每个规格包含spec.md、plan.md、evidence.md。开发流程见CONTRIBUTING.md。

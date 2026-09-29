@@ -134,6 +134,9 @@ async def run_live(
                         gateway,
                         profile=settings.bot_profile,
                         max_reply_chars=settings.max_reply_chars,
+                        mention_conversations=[
+                            key for key, target in routes.items() if target.kind == "group"
+                        ],
                     ),
                     delivery,
                     clock,

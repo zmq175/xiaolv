@@ -103,7 +103,9 @@ TextPart升级为有序segments，其中包含TextSegment(text)和MentionSegment
 
 源码地址：https://github.com/SnowLuma/SnowLuma/blob/1ef9a2c33023b5fcb400865c8281d2dfd190540b/packages/onebot/src/event-converter/element-codecs.ts
 
-动态发送准备见 SPEC-021：通过 get_group_member_list(group_id, no_cache=true) 核实成员，严格检查响应和每条记录的群范围。不能用 get_group_member_info 返回了匹配账号作为在群证明：参考版本可能对查不到的账号返回占位资料。准备成功后由 DeliveryService 再检查期限与 epoch 并认领发送。普通文字不查询成员，未找到目标不静默去掉 @。当前模型选择仍待接线，no_cache 的实际效果及通知需真实 QQ 验收。
+动态发送准备见 SPEC-021：通过 get_group_member_list(group_id, no_cache=true) 核实成员，严格检查响应和每条记录的群范围。不能用 get_group_member_info 返回了匹配账号作为在群证明：参考版本可能对查不到的账号返回占位资料。准备成功后由 DeliveryService 再检查期限与 epoch 并认领发送。普通文字不查询成员，未找到目标不静默去掉 @。no_cache 的实际效果及通知需真实 QQ 验收。
+
+SPEC-022 已接通模型选择：组合层为群聊开启 mention schema，模型从裁剪后上下文的 member_ref 选择；程序解析为稳定账号，运行时再次校验会话范围，再走动态准备和持久发送。空数组不通知，未知引用直接拒绝。这一增量使用 TextReply(text, mentions) 并前置原生 at 段，尚未替代本节目标中的任意有序 segments；模型引用选择也仍待完成。真实平台验收仍未完成。
 
 ## 9. 首个TTS实现：FishAudioProvider
 

@@ -12,6 +12,7 @@ from langgraph.graph import END, START, StateGraph
 from xiaolv.application.delivery import DeliveryRequest, DeliveryService
 from xiaolv.domain.chat_event import ConversationContext
 from xiaolv.domain.model_budget import BudgetDenied
+from xiaolv.domain.text_reply import TextReply
 
 
 @dataclass(frozen=True)
@@ -27,13 +28,14 @@ class ConversationCandidate:
 class ConversationModel(Protocol):
     async def decide(self, candidate: ConversationCandidate) -> Literal["respond", "silence"]: ...
 
-    async def reply(self, candidate: ConversationCandidate) -> str: ...
+    async def reply(self, candidate: ConversationCandidate) -> str | TextReply: ...
 
 
 class _State(TypedDict, total=False):
     candidate: ConversationCandidate
     decision: str
     text: str
+    mentions: tuple[str, ...]
 
 
 class TextRuntime:
@@ -95,6 +97,7 @@ class TextRuntime:
                 candidate.expires_at,
                 candidate.generation_epoch,
                 state["text"],
+                mentions=state.get("mentions", ()),
             )
         )
 
@@ -105,8 +108,19 @@ class TextRuntime:
         )
         return {"decision": decision}
 
-    async def _reply(self, state: _State) -> dict[str, str]:
-        return {"text": await self._model.reply(state["candidate"])}
+    async def _reply(self, state: _State) -> _State:
+        reply = await self._model.reply(state["candidate"])
+        if isinstance(reply, str):
+            return {"text": reply, "mentions": ()}
+        candidate = state["candidate"]
+        if any(
+            item.conversation_id != candidate.conversation_id for item in candidate.context.messages
+        ):
+            raise ValueError("conversation context scope mismatch")
+        accounts = {item.sender_account_id for item in candidate.context.messages}
+        if any(account not in accounts for account in reply.mentions):
+            raise ValueError("mention target is outside conversation context")
+        return {"text": reply.text, "mentions": reply.mentions}
 
     async def _route(self, state: _State) -> str:
         return state["decision"]

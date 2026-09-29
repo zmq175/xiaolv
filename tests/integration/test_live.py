@@ -35,6 +35,8 @@ class Services:
         self.connection = None
         self.model_started = asyncio.Event()
         self.hold = None
+        self.mentions = []
+        self.member_queries = []
 
     async def onebot(self, ws):
         self.connection = ws
@@ -54,6 +56,18 @@ class Services:
                 for frame in self.frames:
                     await ws.send(json.dumps(frame))
                 self.received.set()
+            elif request["action"] == "get_group_member_list":
+                self.member_queries.append(request["params"])
+                await ws.send(
+                    json.dumps(
+                        {
+                            "status": "ok",
+                            "retcode": 0,
+                            "echo": request["echo"],
+                            "data": [{"group_id": 20000, "user_id": 10001}],
+                        }
+                    )
+                )
             elif request["action"] == "send_group_msg":
                 self.sent.append(request["params"])
                 await ws.send(
@@ -87,6 +101,8 @@ class Services:
             value = (
                 {"action": self.action} if "action" in properties else {"text": "我觉得先试一下。"}
             )
+            if "action" not in properties and (self.mentions or "mentions" in properties):
+                value["mentions"] = self.mentions
             chunks = [
                 {
                     "choices": [
@@ -166,6 +182,7 @@ async def test_online_text_composition_reaches_native_send(database_url, service
         assert summary.stored == 1
         assert summary.outcomes == {"confirmed": 1}
         assert len(services.model_requests) == 2
+        assert services.member_queries == []
         assert services.sent == [
             {"group_id": 20000, "message": [{"type": "text", "data": {"text": "我觉得先试一下。"}}]}
         ]
@@ -174,6 +191,53 @@ async def test_online_text_composition_reaches_native_send(database_url, service
         task.cancel()
         ready.cancel()
         await asyncio.gather(task, ready, return_exceptions=True)
+
+
+async def test_online_model_selects_member_reference_for_native_mention(database_url, services):
+    services.mentions = ["member_1"]
+    stop = asyncio.Event()
+    task = asyncio.create_task(run_live(settings(database_url, services), stop))
+    try:
+        await asyncio.wait_for(services.delivered.wait(), 5)
+        stop.set()
+        summary = await asyncio.wait_for(task, 6)
+        assert summary.outcomes == {"confirmed": 1}
+        context = json.loads(services.model_requests[-1]["messages"][1]["content"])
+        assert context["messages"][-1]["member_ref"] == "member_1"
+        assert services.member_queries == [{"group_id": 20000, "no_cache": True}]
+        assert services.sent == [
+            {
+                "group_id": 20000,
+                "message": [
+                    {"type": "at", "data": {"qq": "10001"}},
+                    {"type": "text", "data": {"text": "我觉得先试一下。"}},
+                ],
+            }
+        ]
+    finally:
+        stop.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("reference", ["member_999", "qq:10001", "all"])
+async def test_online_model_cannot_invent_a_member_reference(database_url, services, reference):
+    from xiaolv.live import LiveSummary
+
+    services.mentions = [reference]
+    stats = LiveSummary()
+    stop = asyncio.Event()
+    task = asyncio.create_task(run_live(settings(database_url, services), stop, statistics=stats))
+    try:
+        await until(lambda: stats.outcomes.get("model_error") == 1, task)
+        stop.set()
+        assert (await asyncio.wait_for(task, 6)).outcomes == {"model_error": 1}
+        assert services.member_queries == []
+        assert services.sent == []
+    finally:
+        stop.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 async def test_wrong_logged_in_account_stops_before_model_or_send(database_url, services):
