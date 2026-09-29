@@ -18,4 +18,6 @@
 
 | [013 文字模型协议](013-chat-model/spec.md) | Verified | 51个协议/配置/usage审计用例；真实供应商待验收 |
 
+| [014 模型费用账本](014-model-budget/spec.md) | Verified | PG预留、结算、竞争、跨月与SIGKILL保留 |
+
 Verified仅表示该规格明示范围通过验证，不代表完整首版或真实QQ上线验收。每个规格包含spec.md、plan.md、evidence.md。开发流程见CONTRIBUTING.md。

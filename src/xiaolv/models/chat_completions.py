@@ -12,6 +12,7 @@ from uuid import uuid4
 
 import httpx
 
+from xiaolv.domain.model_budget import ModelBudget, ModelCallIntent
 from xiaolv.domain.model_usage import ModelCallReport, TokenUsage
 
 
@@ -28,6 +29,7 @@ class ChatCompletionsGateway:
         concurrency: int = 2,
         max_response_bytes: int = 65536,
         usage_sink: Callable[[ModelCallReport], Awaitable[None]] | None = None,
+        budget: ModelBudget | None = None,
     ) -> None:
         if not all(
             isinstance(value, str) and value.strip() for value in (base_url, api_key, model)
@@ -77,6 +79,7 @@ class ChatCompletionsGateway:
         self._slots = asyncio.Semaphore(concurrency)
         self._max_response_bytes = max_response_bytes
         self._usage_sink = usage_sink
+        self._budget = budget
 
     async def __aenter__(self) -> Self:
         await self._client.__aenter__()
@@ -98,6 +101,15 @@ class ChatCompletionsGateway:
             raise TimeoutError("model deadline expired")
         async with asyncio.timeout(remaining), self._slots:
             started_at = datetime.now(UTC)
+            call_id = uuid4().hex
+            if self._budget is not None:
+                encoded = json.dumps(
+                    {"instructions": instructions, "context": context, "schema": schema},
+                    ensure_ascii=False,
+                ).encode("utf-8")
+                await self._budget.reserve(
+                    ModelCallIntent(call_id, self._model, started_at, len(encoded) + 1024, 512)
+                )
             usage = None
             status: Literal["completed", "failed", "cancelled"] = "failed"
             try:
@@ -110,11 +122,11 @@ class ChatCompletionsGateway:
                 status = "cancelled"
                 raise
             finally:
-                if self._usage_sink is not None:
+                if self._usage_sink is not None or self._budget is not None:
                     await asyncio.shield(
                         self._record(
                             ModelCallReport(
-                                uuid4().hex,
+                                call_id,
                                 self._model,
                                 started_at,
                                 datetime.now(UTC),
@@ -125,8 +137,10 @@ class ChatCompletionsGateway:
                     )
 
     async def _record(self, report: ModelCallReport) -> None:
-        if self._usage_sink is not None:
-            async with asyncio.timeout(2):
+        async with asyncio.timeout(2):
+            if self._budget is not None:
+                await self._budget.settle(report)
+            if self._usage_sink is not None:
                 await self._usage_sink(report)
 
     async def _generate(

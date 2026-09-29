@@ -10,6 +10,7 @@ from langgraph.graph import END, START, StateGraph
 
 from xiaolv.application.delivery import DeliveryRequest, DeliveryService
 from xiaolv.domain.chat_event import ConversationContext
+from xiaolv.domain.model_budget import BudgetDenied
 
 
 @dataclass(frozen=True)
@@ -76,6 +77,8 @@ class TextRuntime:
         try:
             async with deadline:
                 state = await self._graph.ainvoke({"candidate": candidate})
+        except BudgetDenied:
+            return "budget_denied"
         except TimeoutError:
             return "expired" if deadline.expired() else "model_error"
         except Exception:  # noqa: BLE001 - graph/model failure is a terminal replay outcome
