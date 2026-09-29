@@ -10,6 +10,7 @@ from typing import Literal, Protocol, TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from xiaolv.application.delivery import DeliveryRequest, DeliveryService
+from xiaolv.application.inbound_images import InboundImages
 from xiaolv.application.inbound_speech import InboundSpeech, MediaUnavailable
 from xiaolv.domain.authorization import PermissionDenied
 from xiaolv.domain.bot_profile import ProfileSnapshot
@@ -71,11 +72,13 @@ class TextRuntime:
         profile_loader: Callable[[], Awaitable[ProfileSnapshot]] | None = None,
         voice_delivery: VoiceDelivery | None = None,
         inbound_speech: InboundSpeech | None = None,
+        inbound_images: InboundImages | None = None,
     ) -> None:
         self._locks: dict[str, asyncio.Lock] = {}
         self._model = model
         self._voice_delivery = voice_delivery
         self._inbound_speech = inbound_speech
+        self._inbound_images = inbound_images
         self._profile_loader = profile_loader
         self._delivery = delivery
         self._clock = clock
@@ -208,8 +211,15 @@ class TextRuntime:
 
     async def _reply(self, state: _State) -> _State:
         await self._delivery.require_permission(state["candidate"].conversation_id)
-        if self._inbound_speech is not None:
-            state["candidate"] = await self._inbound_speech.enrich(state["candidate"])
+        for preparation in (self._inbound_speech, self._inbound_images):
+            if preparation is None:
+                continue
+            if isinstance(preparation, InboundImages):
+                state["candidate"] = await preparation.enrich(
+                    state["candidate"], self._delivery.require_permission
+                )
+            else:
+                state["candidate"] = await preparation.enrich(state["candidate"])
             await self._delivery.require_permission(state["candidate"].conversation_id)
             if self._clock() >= state["candidate"].expires_at:
                 raise TimeoutError()

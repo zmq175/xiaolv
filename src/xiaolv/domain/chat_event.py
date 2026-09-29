@@ -7,7 +7,7 @@ from typing import Literal
 
 @dataclass(frozen=True)
 class MediaInterpretation:
-    kind: Literal["transcript"]
+    kind: Literal["transcript", "image_description"]
     text: str
     processor: str
 
