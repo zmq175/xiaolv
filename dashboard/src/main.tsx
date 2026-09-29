@@ -1,21 +1,14 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 import "./style.css";
+import { request } from "./api";
+import { ProfileEditor } from "./ProfileEditor";
 
 function messageFor(status: number): string {
   if (status === 401) return "密码不正确，请重新输入。";
   if (status === 429) return "尝试次数过多，请稍后再试。";
   if (status === 403) return "无法验证此次请求，请刷新页面后重试。";
   return "服务暂时不可用，请稍后重试。";
-}
-
-async function request(path: string, options?: RequestInit): Promise<Response> {
-  return fetch(`/admin/api/${path}`, {
-    credentials: "same-origin",
-    cache: "no-store",
-    signal: AbortSignal.timeout(10000),
-    ...options,
-  });
 }
 
 async function sessionToken(response: Response): Promise<string> {
@@ -121,7 +114,7 @@ function App() {
         </span>
         <span className="scope">管理员入口</span>
       </header>
-      <main>
+      <main className={csrf ? "workspace" : undefined}>
         <section className="access" aria-busy={checking || submitting}>
           <div className="accent" aria-hidden="true" />
           {checking ? (
@@ -190,6 +183,7 @@ function App() {
             </>
           )}
         </section>
+        {csrf && <ProfileEditor csrf={csrf} onExpired={() => setCsrf(null)} />}
         <footer>管理员访问 · 会话验证</footer>
       </main>
     </>

@@ -11,17 +11,12 @@
 | [007 OneBot发送](007-onebot-sender/spec.md) | Verified | 群聊/私聊原生请求与回执 |
 | [008 WebSocket连接](008-onebot-websocket/spec.md) | Verified | 本地协议认证、混流、并发和断连 |
 | [009 原生成员@](009-native-mentions/spec.md) | Verified | 会话内成员映射、at段及PG持久化 |
-
 | [010 入站归一化](010-onebot-ingress/spec.md) | Verified | 群/私聊/临时会话、结构化段及时间 |
 | [011 持久入站](011-persistent-inbox/spec.md) | Verified | PG去重、版本快照、隔离与故障回滚 |
 | [012 持久候选调度](012-durable-candidates/spec.md) | Verified | 合并、租约、SIGKILL恢复与旧worker隔离 |
-
 | [013 文字模型协议](013-chat-model/spec.md) | Verified | 51个协议/配置/usage审计用例；真实供应商待验收 |
-
 | [014 模型费用账本](014-model-budget/spec.md) | Verified | PG预留、结算、竞争、跨月与SIGKILL保留 |
-
 | [015 在线文字接线](015-live-text-service/spec.md) | Verified | 本机端到端、CLI信号、门控与恢复；真实平台待验收 |
-
 | [016 标准日志框架](016-standard-logging/spec.md) | Verified | 标准logging、轮转、OTel回合内关联与CLI |
 | [017 模型SDK](017-model-sdk/spec.md) | Verified | 官方SDK原始流、费用原值校验、取消与端到端回归 |
 | [018 身份与提示词](018-configurable-persona/spec.md) | Verified | 配置改名、模板分离、长度一致、在线接线 |
@@ -39,9 +34,8 @@
 | [030 管理HTTP认证](030-admin-auth/spec.md) | Verified | 密码库、PG会话、Cookie/CSRF/Origin、过期撤销、并发限速；网页与部署待完成 |
 | [031 独立管理服务](031-admin-server/spec.md) | Verified | 密码文件初始化、真实子进程HTTP登录/停止、配置与schema门禁；浏览器页面待完成 |
 | [032 管理登录页面](032-admin-login-ui/spec.md) | Verified | React同源页面、真实浏览器登录/刷新/退出、断网/限速/键盘和双视口；配置发布待实现 |
-
 | [033 人设草稿与发布](033-profile-publication/spec.md) | Verified | HTTP草稿/发布/回滚、并发版本与持久幂等；网页编辑和聊天采用待接线 |
-
 | [034 回合人设快照](034-turn-profile/spec.md) | Verified | 管理发布进入在线模型提示、整回合固定版本、回滚/草稿隔离、TTL与版本日志 |
+| [035 人设编辑页面](035-profile-editor/spec.md) | Verified | 浏览器编辑、草稿保存与发布、同键重试和冲突恢复；双视口与真实PG验收 |
 
 Verified仅表示该规格明示范围通过验证，不代表完整首版或真实QQ上线验收。每个规格包含spec.md、plan.md、evidence.md。开发流程见CONTRIBUTING.md。

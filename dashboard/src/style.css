@@ -165,3 +165,110 @@ footer {
     font-size: 25px;
   }
 }
+.workspace {
+  width: min(1040px, calc(100% - 40px));
+  margin-top: 36px;
+}
+.workspace .access {
+  padding: 20px 28px;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+.workspace .access .accent,
+.workspace .access .eyebrow,
+.workspace .access .description,
+.workspace .session-status {
+  display: none;
+}
+.workspace .access h1 {
+  font-size: 20px;
+  margin: 0;
+  flex: 1;
+}
+.workspace .access button {
+  width: auto;
+  padding: 0 20px;
+  margin: 0;
+}
+.profile-editor {
+  background: white;
+  border: 1px solid #dce3db;
+  border-radius: 12px;
+  margin-top: 24px;
+  padding: 28px;
+}
+.editor-heading h2 {
+  margin: 0 0 8px;
+  font-size: 23px;
+}
+.editor-heading p,
+.publication-state p,
+.edit-status {
+  color: #58695e;
+  font-size: 14px;
+  line-height: 1.7;
+}
+.publication-state {
+  border-block: 1px solid #e3e9e3;
+  margin: 24px 0;
+  padding: 16px 0 4px;
+}
+.profile-editor form {
+  max-width: 720px;
+}
+.profile-field {
+  margin: 0 0 22px;
+}
+textarea {
+  width: 100%;
+  padding: 10px 13px;
+  border: 1px solid #b5c3b9;
+  border-radius: 6px;
+  font: inherit;
+  color: inherit;
+  resize: vertical;
+  line-height: 1.6;
+}
+textarea:focus-visible {
+  outline: 3px solid #76b59a;
+  outline-offset: 3px;
+}
+.profile-field small {
+  display: block;
+  margin-top: 6px;
+  color: #58695e;
+}
+.editor-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.editor-actions button {
+  width: auto;
+  padding: 0 24px;
+  margin-top: 0;
+}
+.notice {
+  color: #1b6045;
+  font-size: 14px;
+}
+@media (max-width: 480px) {
+  .workspace {
+    width: calc(100% - 24px);
+    margin-top: 20px;
+  }
+  .workspace .access,
+  .profile-editor {
+    padding: 20px;
+  }
+  .editor-actions button {
+    flex: 1;
+    padding: 0 14px;
+  }
+}
+
+[aria-invalid="true"] {
+  border-color: #a12828;
+}
