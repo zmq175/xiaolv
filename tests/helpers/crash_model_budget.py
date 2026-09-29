@@ -7,7 +7,7 @@ import signal
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
-import httpx
+import httpx2 as httpx
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from xiaolv.application.delivery import DeliveryService

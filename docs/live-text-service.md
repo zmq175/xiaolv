@@ -19,6 +19,8 @@ PYTHONPATH=src uv run python -m xiaolv
 
 在线模式需要 `XIAOLV_MODE=live`，并设置数据库 DSN、模型接口地址/密钥/模型 ID、供应商标识、价格版本、人民币每百万输入/输出 token 单价、模型月额度、OneBot WebSocket 地址/token、QQ 登录账号 ID。部署时为模型使用 HTTPS、为远程 OneBot 使用 WSS；本机模拟允许 loopback HTTP/WS。密钥通过请求头发送，不能放入 URL。
 
+模型请求与SSE解码使用官方openai Python SDK，不维护自写SSE解析器。SDK自动重试关闭，首内容/空闲/整轮截止时间由应用控制；原始流模式保留用量字段用于严格计费校验。当前请求identity编码并拒绝压缩模型响应，真实供应商需验证支持情况。
+
 单价和额度必须由管理员填写，不提供真实价格默认值；价格版本供历史结算审计，缓存价可选。`XIAOLV_MONTHLY_EXTERNAL_BUDGET_CNY` 当前为模型池额度，**不受 200 元限制**，与部署成本分开；0 表示禁止新模型调用。月池按 PostgreSQL UTC 自然月结算。同一月份已建立额度后，配置不能静默改写账本额度；运行中调额需后续管理能力。`XIAOLV_MONTHLY_FIXED_COST_CNY` 是可选部署规划信息，不参与额度校验，不要求填写。
 
 会话默认全部关闭。使用 JSON 整数数组启用指定群或私聊，例如 shell 配置：

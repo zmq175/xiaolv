@@ -23,7 +23,7 @@
 | [015 在线文字接线](015-live-text-service/spec.md) | Verified | 本机端到端、CLI信号、门控与恢复；真实平台待验收 |
 
 | [016 标准日志框架](016-standard-logging/spec.md) | Verified | 标准logging、轮转、OTel回合内关联与CLI |
-| [017 模型SDK](017-model-sdk/spec.md) | Ready | 替换手写HTTP/SSE，待实现 |
+| [017 模型SDK](017-model-sdk/spec.md) | Verified | 官方SDK原始流、费用原值校验、取消与端到端回归 |
 | [018 身份与提示词](018-configurable-persona/spec.md) | Verified | 配置改名、模板分离、长度一致、在线接线 |
 
 Verified仅表示该规格明示范围通过验证，不代表完整首版或真实QQ上线验收。每个规格包含spec.md、plan.md、evidence.md。开发流程见CONTRIBUTING.md。

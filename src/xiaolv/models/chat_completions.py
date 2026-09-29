@@ -1,4 +1,4 @@
-"""Chat Completions protocol adapter; streams stay inside the model boundary."""
+"""Official SDK adapter with application deadlines and cost accounting."""
 
 import asyncio
 import json
@@ -10,7 +10,8 @@ from typing import Any, Literal, Self, cast
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-import httpx
+import httpx2 as httpx
+from openai import AsyncOpenAI, AsyncStream
 from opentelemetry import trace
 
 from xiaolv.domain.model_budget import ModelBudget, ModelCallIntent
@@ -66,13 +67,19 @@ class ChatCompletionsGateway:
             or max_response_bytes <= 0
         ):
             raise ValueError("invalid model configuration limits")
-        self._client = httpx.AsyncClient(
+        self._client = AsyncOpenAI(
             base_url=base_url.rstrip("/") + "/",
-            headers={"Authorization": "Bearer " + api_key},
-            transport=transport,
-            trust_env=False,
-            follow_redirects=False,
-            timeout=None,  # Stage and absolute deadlines cover connect, headers and body.
+            api_key=api_key,
+            max_retries=0,
+            timeout=None,
+            http_client=httpx.AsyncClient(
+                transport=transport,
+                trust_env=False,
+                follow_redirects=False,
+                timeout=None,
+                headers={"Accept-Encoding": "identity"},
+                event_hooks={"response": [self._bound_response]},
+            ),
         )
         self._model = model
         self._first_token_seconds = first_token_seconds
@@ -81,6 +88,17 @@ class ChatCompletionsGateway:
         self._max_response_bytes = max_response_bytes
         self._usage_sink = usage_sink
         self._budget = budget
+
+    async def _bound_response(self, response: httpx.Response) -> None:
+        if response.headers.get("content-encoding", "identity").lower() != "identity":
+            await response.aclose()
+            raise ValueError("compressed model responses are unsupported")
+        if response.is_stream_consumed:
+            if len(response.content) > self._max_response_bytes:
+                await response.aclose()
+                raise ValueError("model response exceeds byte limit")
+        elif isinstance(response.stream, httpx.AsyncByteStream):
+            response.stream = _LimitedStream(response.stream, self._max_response_bytes)
 
     async def __aenter__(self) -> Self:
         await self._client.__aenter__()
@@ -150,74 +168,81 @@ class ChatCompletionsGateway:
     async def _generate(
         self, *, instructions: str, context: str, schema: dict[str, Any]
     ) -> tuple[str, TokenUsage | None]:
-        body = {
-            "model": self._model,
-            "stream": True,
-            "stream_options": {"include_usage": True},
-            "max_completion_tokens": 512,
-            "messages": [
-                {"role": "system", "content": instructions},
-                {"role": "user", "content": context},
-            ],
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {"name": "chat_output", "strict": True, "schema": schema},
-            },
-        }
-        output = []
+        output: list[str] = []
         finished = False
-        done = False
         usage = None
         async with (
             asyncio.timeout(self._first_token_seconds) as stage,
-            self._client.stream("POST", "chat/completions", json=body) as response,
+            self._client.chat.completions.with_streaming_response.create(
+                model=self._model,
+                stream=True,
+                stream_options={"include_usage": True},
+                max_completion_tokens=512,
+                messages=[
+                    {"role": "system", "content": instructions},
+                    {"role": "user", "content": context},
+                ],
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "chat_output",
+                        "strict": True,
+                        "schema": schema,
+                    },
+                },
+            ) as response,
         ):
-            response.raise_for_status()
-            async for data in self._events(response):
-                if data == "[DONE]":
-                    done = True
-                    break
-                chunk = json.loads(data)
-                if finished and chunk.get("choices") == [] and chunk.get("usage") is not None:
-                    usage = _parse_usage(chunk["usage"])
-                if "error" in chunk:
-                    raise ValueError("model stream reported failure")
-                for choice in chunk.get("choices", []):
-                    if choice.get("index") != 0 or finished:
-                        raise ValueError("invalid model stream")
-                    delta = choice.get("delta", {})
-                    if any(delta.get(key) for key in ("refusal", "tool_calls", "function_call")):
-                        raise ValueError("unsupported model output")
-                    content = delta.get("content")
-                    if content:
-                        output.append(content)
-                        stage.reschedule(asyncio.get_running_loop().time() + self._idle_seconds)
-                    finish = choice.get("finish_reason")
-                    if finish is not None:
-                        if finish != "stop":
-                            raise ValueError("incomplete model output")
-                        finished = True
-        if not done or not finished:
+            stream = await response.parse(to=AsyncStream[dict[str, Any]])
+            async with stream:
+                async for chunk in stream:
+                    if not isinstance(chunk, dict):
+                        raise TypeError("invalid model stream")
+                    if finished and chunk.get("choices") == [] and chunk.get("usage") is not None:
+                        usage = _parse_usage(chunk["usage"])
+                    for choice in chunk.get("choices", []):
+                        if choice.get("index") != 0 or finished:
+                            raise ValueError("invalid model stream")
+                        delta = choice.get("delta", {})
+                        if any(
+                            delta.get(key) for key in ("refusal", "tool_calls", "function_call")
+                        ):
+                            raise ValueError("unsupported model output")
+                        content = delta.get("content")
+                        if content:
+                            if not isinstance(content, str):
+                                raise ValueError("invalid model content")
+                            output.append(content)
+                            stage.reschedule(asyncio.get_running_loop().time() + self._idle_seconds)
+                        finish = choice.get("finish_reason")
+                        if finish is not None:
+                            if finish != "stop":
+                                raise ValueError("incomplete model output")
+                            finished = True
+        if not finished:
             raise ValueError("incomplete model stream")
         return "".join(output), usage
 
-    async def _events(self, response: httpx.Response) -> AsyncIterator[str]:
-        buffer = b""
+
+class _LimitedStream(httpx.AsyncByteStream):
+    """HTTP byte quota only; SSE framing and decoding belong to the SDK."""
+
+    def __init__(self, stream: httpx.AsyncByteStream, limit: int) -> None:
+        self._stream = stream
+        self._limit = limit
+
+    async def __aiter__(self) -> AsyncIterator[bytes]:
         total = 0
-        data_lines: list[str] = []
-        async for chunk in response.aiter_bytes():
-            total += len(chunk)
-            if total > self._max_response_bytes:
-                raise ValueError("model response exceeds byte limit")
-            buffer += chunk
-            while b"\n" in buffer:
-                line, _, buffer = buffer.partition(b"\n")
-                line = line.removesuffix(b"\r")
-                if not line and data_lines:
-                    yield "\n".join(data_lines)
-                    data_lines.clear()
-                elif line.startswith(b"data:"):
-                    data_lines.append(line[5:].removeprefix(b" ").decode("utf-8"))
+        try:
+            async for chunk in self._stream:
+                total += len(chunk)
+                if total > self._limit:
+                    raise ValueError("model response exceeds byte limit")
+                yield chunk
+        finally:
+            await self._stream.aclose()
+
+    async def aclose(self) -> None:
+        await self._stream.aclose()
 
 
 def _parse_usage(raw: object) -> TokenUsage | None:

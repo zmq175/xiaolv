@@ -1,7 +1,7 @@
 import json
 from datetime import UTC, datetime, timedelta
 
-import httpx
+import httpx2 as httpx
 
 from xiaolv.application.delivery import DeliveryService
 from xiaolv.models.chat_completions import ChatCompletionsGateway
@@ -107,7 +107,6 @@ import pytest
         ("tool_calls", True),
         ("content_filter", True),
         (None, True),
-        ("stop", False),
     ],
 )
 async def test_incomplete_or_nontext_finish_never_sends_even_if_json_is_valid(finish, done):
@@ -642,6 +641,8 @@ async def test_usage_log_reports_explicit_tokens_without_chat_content():
     [
         None,
         {},
+        {"prompt_tokens": 8},
+        {"prompt_tokens": 8, "completion_tokens": 1},
         {"prompt_tokens": True, "completion_tokens": 1, "total_tokens": 2},
         {"prompt_tokens": -1, "completion_tokens": 1, "total_tokens": 0},
         {"prompt_tokens": 8, "completion_tokens": 1, "total_tokens": 999},
@@ -910,3 +911,87 @@ async def test_configured_identity_is_used_for_participation_and_reply():
     assert "{原样花括号}" in requests[1]["messages"][0]["content"]
     assert "80" in requests[1]["messages"][0]["content"]
     assert "200字" not in requests[1]["messages"][0]["content"]
+
+
+async def test_sdk_accepts_standard_sse_carriage_return_framing():
+    requests = []
+
+    async def serve(request):
+        requests.append(request)
+        body = stream_json({"action": "silence"}).content.replace(b"\n", b"\r")
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=body)
+
+    async with ChatCompletionsGateway(
+        base_url="https://model.example/v1",
+        api_key="synthetic",
+        model="synthetic",
+        transport=httpx.MockTransport(serve),
+    ) as gateway:
+        runner, platform = runtime(gateway)
+        assert await runner.run(candidate()) == "silence"
+        assert platform.sent == []
+    assert len(requests) == 1
+    assert requests[0].headers["x-stainless-lang"] == "python"
+
+
+async def test_sdk_clean_end_after_stop_is_complete_but_missing_usage_stays_unknown():
+    reports = []
+
+    async def record(report):
+        reports.append(report)
+
+    async def serve(request):
+        return stream_json({"action": "silence"}, done=False)
+
+    async with ChatCompletionsGateway(
+        base_url="https://model.example/v1",
+        api_key="synthetic",
+        model="synthetic",
+        transport=httpx.MockTransport(serve),
+        usage_sink=record,
+    ) as gateway:
+        runner, platform = runtime(gateway)
+        assert await runner.run(candidate()) == "silence"
+        assert platform.sent == []
+    assert len(reports) == 1
+    assert reports[0].status == "completed"
+    assert reports[0].usage is None
+
+
+async def test_compressed_response_is_rejected_before_reading_body():
+    reads = []
+
+    class Compressed(httpx.AsyncByteStream):
+        closed = False
+
+        async def __aiter__(self):
+            reads.append("read")
+            yield b"not-consumed"
+
+        async def aclose(self):
+            self.closed = True
+
+    body = Compressed()
+    requests = []
+
+    async def serve(request):
+        requests.append(request)
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream", "content-encoding": "gzip"},
+            stream=body,
+        )
+
+    async with ChatCompletionsGateway(
+        base_url="https://model.example/v1",
+        api_key="synthetic",
+        model="synthetic",
+        transport=httpx.MockTransport(serve),
+    ) as gateway:
+        runner, platform = runtime(gateway)
+        assert await runner.run(candidate()) == "model_error"
+        assert platform.sent == []
+    assert requests[0].headers["accept-encoding"] == "identity"
+    assert len(requests) == 1
+    assert reads == []
+    assert body.closed
