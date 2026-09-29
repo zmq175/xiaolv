@@ -8,5 +8,8 @@
 | [004 文字回放](004-text-replay/spec.md) | Verified | LangGraph假模型决策和受限发送 |
 | [005 启动配置](005-runtime-settings/spec.md) | Verified | 显式在线配置、参数校验及密钥隐藏 |
 | [006 持久发送](006-persistent-delivery/spec.md) | Verified | PostgreSQL发送认领、恢复与迁移 |
+| [007 OneBot发送](007-onebot-sender/spec.md) | Verified | 群聊/私聊原生请求与回执 |
+| [008 WebSocket连接](008-onebot-websocket/spec.md) | Verified | 本地协议认证、混流、并发和断连 |
+| [009 原生成员@](009-native-mentions/spec.md) | Verified | 会话内成员映射、at段及PG持久化 |
 
 Verified仅表示该规格明示范围通过验证，不代表完整首版或真实QQ上线验收。每个规格包含spec.md、plan.md、evidence.md。开发流程见CONTRIBUTING.md。

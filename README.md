@@ -2,7 +2,7 @@
 
 从零构建的自然群聊 Agent。首个 IM 接入为 QQ / SnowLuma，平台交互走原生适配器；MCP 与 Agent Skills 用于扩展能力。
 
-当前处于文字闭环开发阶段：已实现回复有效性规则、内存发送保护、日志编解码和LangGraph本地回放；尚未连接QQ或调用收费模型。完整目标包含参与判断、主动发言、人物记忆、知识库、联网搜索、图片/表情包及语音。是否语音及说什么由 LLM 决定，首个 TTS 供应商为 Fish Audio。
+当前处于文字闭环开发阶段：已实现回复有效性规则、内存/PG发送保护、日志编解码、LangGraph本地回放与OneBot原生发送/本地WebSocket契约；尚未连接QQ或调用收费模型。完整目标包含参与判断、主动发言、人物记忆、知识库、联网搜索、图片/表情包及语音。是否语音及说什么由 LLM 决定，首个 TTS 供应商为 Fish Audio。
 
 ## 开发方式
 
@@ -33,7 +33,7 @@ uv run mypy src
 PYTHONPATH=src uv run python -m xiaolv.replay
 ```
 
-默认演示使用内存状态；另有PostgreSQL发送账本与配置校验。真实适配器、完整outbox调度及权限配额仍在开发，不能用于真实QQ上线。
+默认演示使用内存状态；另有PostgreSQL发送账本与配置校验。入站归一化、完整outbox调度及权限配额仍在开发，不能用于真实QQ上线。
 
 数据库开发说明见[持久化测试与迁移](docs/postgres-development.md)。完整进度见[开发状态](docs/development-status.md)。
 

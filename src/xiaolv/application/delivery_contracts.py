@@ -14,6 +14,7 @@ class DeliveryRequest:
     expires_at: datetime
     generation_epoch: int
     text: str
+    mentions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

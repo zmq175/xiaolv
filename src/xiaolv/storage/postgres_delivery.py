@@ -1,5 +1,6 @@
 """PostgreSQL delivery ledger; short transactions, no platform IO."""
 
+import json
 from dataclasses import asdict
 from datetime import datetime
 from typing import cast
@@ -50,6 +51,7 @@ class PostgresDeliveryLedger:
                     row["expires_at"],
                     row["generation_epoch"],
                     row["body"],
+                    tuple(row["mentions"]),
                 )
                 if stored != request:
                     raise ValueError("outgoing_id payload conflict")
@@ -67,12 +69,13 @@ class PostgresDeliveryLedger:
             await connection.execute(
                 text("""
                 INSERT INTO app.outbox (outgoing_id, conversation_id, expires_at,
-                    generation_epoch, body, status, attempt_token, lease_until)
+                    generation_epoch, body, mentions, status, attempt_token, lease_until)
                 VALUES (:outgoing_id, :conversation_id, :expires_at, :generation_epoch,
-                    :text, :status, :token, clock_timestamp() + :lease * interval '1 second')
+                    :text, CAST(:mentions_json AS jsonb), :status, :token, clock_timestamp() + :lease * interval '1 second')
             """),
                 {
                     **asdict(request),
+                    "mentions_json": json.dumps(request.mentions),
                     "token": token,
                     "lease": self._lease_seconds,
                     "status": terminal or "sending",

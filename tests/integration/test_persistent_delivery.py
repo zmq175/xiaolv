@@ -257,3 +257,63 @@ async def test_downgraded_database_fails_closed_then_upgrade_restores_service(da
         assert await service.deliver(request) == "confirmed"
     finally:
         await engine.dispose()
+
+
+async def test_mentions_survive_restart_and_cannot_be_replaced(database_url):
+    from dataclasses import replace
+
+    import pytest
+
+    engine = create_async_engine(database_url, hide_parameters=True)
+    platform = RecordingPlatform()
+    try:
+        service = DeliveryService(platform, ledger=PostgresDeliveryLedger(engine))
+        request = replace(outgoing(await service.start_turn("chat-1")), mentions=("account-alice",))
+        assert await service.deliver(request) == "confirmed"
+        restarted = DeliveryService(platform, ledger=PostgresDeliveryLedger(engine))
+        assert await restarted.deliver(request) == "confirmed"
+        with pytest.raises(ValueError, match="conflict"):
+            await restarted.deliver(replace(request, mentions=("account-bob",)))
+        assert platform.sent == [request]
+    finally:
+        await engine.dispose()
+
+
+async def test_mentions_migration_preserves_preexisting_confirmed_text(database_url):
+    from alembic import command
+    from alembic.config import Config
+    from sqlalchemy import text
+
+    engine = create_async_engine(database_url, hide_parameters=True)
+    platform = RecordingPlatform()
+    request = outgoing(1)
+    try:
+
+        def migrate(connection, upgrade):
+            config = Config("alembic.ini")
+            config.attributes["connection"] = connection
+            if upgrade:
+                command.upgrade(config, "head")
+            else:
+                command.downgrade(config, "0001_delivery")
+
+        # Historical data is setup input, not a private-state assertion.
+        async with engine.begin() as connection:
+            await connection.run_sync(migrate, False)
+            await connection.execute(
+                text("INSERT INTO app.conversation_state VALUES ('chat-1', 1)")
+            )
+            await connection.execute(
+                text("""
+                INSERT INTO app.outbox (outgoing_id, conversation_id, expires_at,
+                    generation_epoch, body, status, attempt_token, lease_until)
+                VALUES ('out-1', 'chat-1', :expires_at, 1, :body, 'confirmed', 'old-token', :expires_at)
+            """),
+                {"expires_at": request.expires_at, "body": request.text},
+            )
+            await connection.run_sync(migrate, True)
+        service = DeliveryService(platform, ledger=PostgresDeliveryLedger(engine))
+        assert await service.deliver(request) == "confirmed"
+        assert platform.sent == []
+    finally:
+        await engine.dispose()
