@@ -403,3 +403,33 @@ textarea:focus-visible {
     padding: 20px;
   }
 }
+
+.speech-costs .conversation-list li {
+  flex-wrap: wrap;
+}
+.speech-costs form {
+  margin: 24px 0;
+}
+.speech-costs h3,
+.speech-costs p,
+.speech-costs span {
+  overflow-wrap: anywhere;
+}
+.speech-costs label {
+  display: block;
+  margin-bottom: 16px;
+}
+.speech-costs input,
+.speech-costs textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+.speech-costs textarea {
+  min-height: 96px;
+}
+.speech-preview {
+  padding: 16px;
+  background: #f1f7f2;
+  border: 1px solid #d8e2d8;
+  border-radius: 8px;
+}

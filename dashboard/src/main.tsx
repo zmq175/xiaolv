@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 import "./style.css";
 import { request } from "./api";
+import { SpeechCosts } from "./SpeechCosts";
 import { ConversationControls } from "./ConversationControls";
 import { ProfileEditor } from "./ProfileEditor";
 
@@ -187,6 +188,7 @@ function App() {
         {csrf && (
           <ConversationControls csrf={csrf} onExpired={() => setCsrf(null)} />
         )}
+        {csrf && <SpeechCosts csrf={csrf} onExpired={() => setCsrf(null)} />}
         {csrf && <ProfileEditor csrf={csrf} onExpired={() => setCsrf(null)} />}
         <footer>管理员访问 · 会话验证</footer>
       </main>
