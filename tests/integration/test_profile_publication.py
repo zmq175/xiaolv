@@ -203,3 +203,43 @@ async def test_missing_draft_or_release_never_changes_state(admin):
         "draft": None,
         "published": None,
     }
+
+
+async def test_release_history_is_authenticated_and_cursor_pagination_is_stable(admin):
+    empty = await admin.get("/admin/api/profile/releases")
+    assert empty.status_code == 200
+    assert empty.json() == {"items": [], "next_before": None}
+    for version in range(1, 4):
+        await admin.put(
+            "/admin/api/profile/draft",
+            json={
+                "expected_version": (version - 1) * 2,
+                "profile": {**PROFILE, "name": f"名字{version}"},
+            },
+            headers={"Idempotency-Key": f"history-draft-{version}"},
+        )
+        await admin.post(
+            "/admin/api/profile/publish",
+            json={"expected_version": version * 2 - 1},
+            headers={"Idempotency-Key": f"history-publish-{version}"},
+        )
+    first = (await admin.get("/admin/api/profile/releases?limit=2")).json()
+    assert [item["version"] for item in first["items"]] == [3, 2]
+    assert first["next_before"] == 2
+    assert first["items"][0]["name"] == "名字3"
+    assert set(first["items"][0]) == {"version", "name", "created_at"}
+    from datetime import datetime
+
+    assert datetime.fromisoformat(first["items"][0]["created_at"]).utcoffset() is not None
+    await admin.post(
+        "/admin/api/profile/publish",
+        json={"expected_version": 6},
+        headers={"Idempotency-Key": "new-release-between-pages"},
+    )
+    second = (await admin.get("/admin/api/profile/releases?limit=2&before=2")).json()
+    assert [item["version"] for item in second["items"]] == [1]
+    assert second["next_before"] is None
+    for query in ("limit=0", "limit=51", "before=0", "before=abc", "before=9223372036854775808"):
+        assert (await admin.get("/admin/api/profile/releases?" + query)).status_code == 422
+    admin.cookies.clear()
+    assert (await admin.get("/admin/api/profile/releases")).status_code == 401

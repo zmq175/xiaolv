@@ -9,7 +9,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 import anyio
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from pwdlib import PasswordHash
@@ -262,6 +262,15 @@ def create_admin_app(
                 "rollback", None, body.expected_version, key, body.release_version
             )
         )
+
+    @app.get("/admin/api/profile/releases")
+    async def profile_history(
+        request: Request,
+        limit: int = Query(default=20, ge=1, le=50),
+        before: int | None = Query(default=None, gt=0, le=9223372036854775807),
+    ) -> JSONResponse:
+        await session(request)
+        return JSONResponse(await profiles.history(limit, before))
 
     @app.get("/admin/api/profile/releases/{version}")
     async def profile_release(version: int, request: Request) -> JSONResponse:

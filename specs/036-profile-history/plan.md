@@ -1,0 +1,3 @@
+# 实施
+
+先HTTP真实PG游标分页红绿，再浏览器差异/历史/回滚纵向验证。历史读取和预览封装为ProfileHistory组件，差异封装为ProfileDiff；ProfileEditor复用原写入恢复流程进行rollback。分页仅返回标题元信息，按选择读取正文；使用请求清理防止乱序响应覆盖选中目标。

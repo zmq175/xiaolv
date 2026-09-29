@@ -25,6 +25,36 @@ class ProfilePublication:
         async with self._engine.connect() as connection:
             return await self._snapshot(connection)
 
+    async def history(self, limit: int, before: int | None) -> dict[str, Any]:
+        async with self._engine.connect() as connection:
+            rows = (
+                (
+                    await connection.execute(
+                        text("""
+                SELECT version, profile->>'name' AS name, created_at
+                FROM app.bot_profile_releases
+                WHERE (CAST(:before AS bigint) IS NULL OR version < :before)
+                ORDER BY version DESC LIMIT :count
+            """),
+                        {"before": before, "count": limit + 1},
+                    )
+                )
+                .mappings()
+                .all()
+            )
+            items = [
+                {
+                    "version": row["version"],
+                    "name": row["name"],
+                    "created_at": row["created_at"].isoformat(),
+                }
+                for row in rows[:limit]
+            ]
+            return {
+                "items": items,
+                "next_before": items[-1]["version"] if len(rows) > limit else None,
+            }
+
     async def release(self, version: int) -> dict[str, Any]:
         async with self._engine.connect() as connection:
             return {"version": version, "profile": await self._release(connection, version)}

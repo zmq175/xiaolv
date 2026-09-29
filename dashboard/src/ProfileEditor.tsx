@@ -1,13 +1,9 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { request } from "./api";
+import { labels, type Profile } from "./profile";
+import { ProfileDiff } from "./ProfileDiff";
+import { ProfileHistory } from "./ProfileHistory";
 
-type Profile = {
-  name: string;
-  aliases: string[];
-  personality: string;
-  participation_style: string;
-  reply_style: string;
-};
 type State = {
   version: number;
   draft: Profile | null;
@@ -20,15 +16,12 @@ const empty: Profile = {
   participation_style: "",
   reply_style: "",
 };
-const labels = {
-  name: "名称",
-  aliases: "别名",
-  personality: "人设",
-  participation_style: "参与风格",
-  reply_style: "回复风格",
-};
 type Field = keyof Profile;
-type Operation = { action: "draft" | "publish"; key: string; body: string };
+type Operation = {
+  action: "draft" | "publish" | "rollback";
+  key: string;
+  body: string;
+};
 
 export function ProfileEditor({
   csrf,
@@ -86,7 +79,10 @@ export function ProfileEditor({
     void load();
   }, []);
 
-  async function mutate(action: "draft" | "publish") {
+  async function mutate(
+    action: "draft" | "publish" | "rollback",
+    releaseVersion?: number,
+  ) {
     if (locked || !state) return;
     await perform({
       action,
@@ -94,6 +90,7 @@ export function ProfileEditor({
       body: JSON.stringify({
         expected_version: state.version,
         ...(action === "draft" ? { profile: value } : {}),
+        ...(action === "rollback" ? { release_version: releaseVersion } : {}),
       }),
     });
   }
@@ -276,6 +273,24 @@ export function ProfileEditor({
                 </button>
               </div>
             </form>
+            {state.draft && (
+              <section aria-label="发布差异" className="profile-diff">
+                <h3>发布差异</h3>
+                <p>比较已保存草稿与当前发布；未保存修改不包含在内。</p>
+                <ProfileDiff
+                  before={state.published?.profile ?? null}
+                  after={state.draft}
+                  afterLabel="已保存草稿"
+                />
+              </section>
+            )}
+            <ProfileHistory
+              key={state.published?.version ?? 0}
+              current={state.published}
+              disabled={locked || dirty}
+              onExpired={onExpired}
+              onRollback={(version) => void mutate("rollback", version)}
+            />
           </>
         )
       )}

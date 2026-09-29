@@ -272,3 +272,79 @@ textarea:focus-visible {
 [aria-invalid="true"] {
   border-color: #a12828;
 }
+.profile-diff,
+.profile-history {
+  border-top: 1px solid #dce3db;
+  margin-top: 28px;
+  padding-top: 16px;
+}
+.profile-diff p,
+.profile-history p {
+  color: #58695e;
+  font-size: 14px;
+  line-height: 1.7;
+}
+.profile-diff h3,
+.profile-history h3 {
+  font-size: 18px;
+  margin-bottom: 10px;
+}
+.diff-field h4 {
+  margin: 16px 0 8px;
+  font-size: 14px;
+}
+.diff-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+.diff-columns > div {
+  min-width: 0;
+}
+.diff-columns small {
+  color: #58695e;
+}
+.diff-columns pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.6;
+  background: #f4f6f2;
+  padding: 12px;
+  border-radius: 6px;
+}
+.release-list {
+  list-style: none;
+  padding: 0;
+}
+.release-list li {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid #e3e9e3;
+  padding: 12px 0;
+}
+.release-list time {
+  color: #58695e;
+  font-size: 13px;
+}
+.profile-history button {
+  width: auto;
+  padding: 0 18px;
+  margin-top: 0;
+}
+.release-list button[aria-pressed="true"] {
+  background: #d8eee2;
+  border-color: #267557;
+}
+@media (max-width: 480px) {
+  .diff-columns {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+  .release-list time {
+    width: 100%;
+  }
+}

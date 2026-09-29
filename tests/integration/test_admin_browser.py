@@ -372,3 +372,139 @@ async def test_profile_csrf_failure_has_session_recovery(admin_url):
             await expect(page.get_by_label("名称", exact=True)).to_have_value("")
         finally:
             await browser.close()
+
+
+@pytest.mark.parametrize("width,height", [(1280, 800), (390, 844)])
+async def test_browser_previews_history_and_rolls_back_without_replacing_draft(
+    admin_url, width, height
+):
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch()
+        try:
+            page = await browser.new_page(viewport={"width": width, "height": height})
+            await login_browser(page, admin_url)
+            name = page.get_by_label("名称", exact=True)
+            await name.fill("青禾")
+            await page.get_by_role("button", name="保存草稿", exact=True).click()
+            await expect(page.get_by_text("草稿已保存", exact=True)).to_be_visible()
+            await page.get_by_role("button", name="发布草稿", exact=True).click()
+            await expect(page.get_by_text("已发布版本 1", exact=True)).to_be_visible()
+            await name.fill("晚晴")
+            await page.get_by_role("button", name="保存草稿", exact=True).click()
+            await expect(page.get_by_text("草稿已保存", exact=True)).to_be_visible()
+            diff = page.get_by_role("region", name="发布差异")
+            await expect(diff).to_contain_text("青禾")
+            await expect(diff).to_contain_text("晚晴")
+            await page.get_by_role("button", name="发布草稿", exact=True).click()
+            await expect(page.get_by_text("已发布版本 2", exact=True)).to_be_visible()
+            await page.get_by_role("button", name="查看历史版本", exact=True).click()
+            await page.get_by_role("button", name="查看版本 1", exact=True).click()
+            preview = page.get_by_role("region", name="回滚预览")
+            await expect(preview).to_contain_text("青禾")
+            await expect(preview).to_contain_text("晚晴")
+            await name.fill("未保存")
+            await expect(
+                page.get_by_role("button", name="回滚到版本 1", exact=True)
+            ).to_be_disabled()
+            await name.fill("晚晴")
+            assert await page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+            await page.screenshot(path=f"artifacts/profile-history-{width}.png", full_page=True)
+            keys = []
+
+            async def lose_response(route):
+                keys.append(route.request.headers["idempotency-key"])
+                if len(keys) == 1:
+                    response = await route.fetch()
+                    assert response.status == 200
+                    await route.abort()
+                else:
+                    await route.continue_()
+
+            if width == 390:
+                await page.route("**/admin/api/profile/rollback", lose_response)
+            await page.get_by_role("button", name="回滚到版本 1", exact=True).click()
+            if width == 390:
+                await expect(page.get_by_role("alert")).to_contain_text("结果尚未确认")
+                await page.get_by_role("button", name="重试原操作", exact=True).click()
+
+            await expect(page.get_by_text("已发布版本 3", exact=True)).to_be_visible()
+            await expect(name).to_have_value("晚晴")
+            if width == 390:
+                assert len(keys) == 2 and keys[0] == keys[1]
+            await page.reload()
+            await expect(name).to_have_value("晚晴")
+            await expect(page.get_by_text("已发布版本 3", exact=True)).to_be_visible()
+        finally:
+            await browser.close()
+
+
+async def test_history_load_and_same_version_preview_can_be_retried(admin_url):
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch()
+        try:
+            page = await browser.new_page()
+            await login_browser(page, admin_url)
+            await page.get_by_label("名称", exact=True).fill("青禾")
+            await page.get_by_role("button", name="保存草稿", exact=True).click()
+            await expect(page.get_by_text("草稿已保存", exact=True)).to_be_visible()
+            await page.get_by_role("button", name="发布草稿", exact=True).click()
+            await expect(page.get_by_text("已发布版本 1", exact=True)).to_be_visible()
+            await page.route("**/admin/api/profile/releases", lambda route: route.abort())
+            await page.get_by_role("button", name="查看历史版本", exact=True).click()
+            await expect(page.get_by_role("alert")).to_contain_text("无法读取历史版本")
+            await page.unroute("**/admin/api/profile/releases")
+            await page.get_by_role("button", name="查看历史版本", exact=True).click()
+            version = page.get_by_role("button", name="查看版本 1", exact=True)
+            await page.route("**/admin/api/profile/releases/1", lambda route: route.abort())
+            await version.click()
+            await expect(page.get_by_role("alert")).to_contain_text("无法读取此版本")
+            await page.unroute("**/admin/api/profile/releases/1")
+            await version.click()
+            await expect(page.get_by_role("region", name="回滚预览")).to_be_visible()
+        finally:
+            await browser.close()
+
+
+async def test_slow_history_preview_cannot_replace_later_selection(admin_url):
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.launch()
+        hold = asyncio.Event()
+        started = asyncio.Event()
+        finished = asyncio.Event()
+        try:
+            page = await browser.new_page()
+            await login_browser(page, admin_url)
+            for version, name in ((1, "青禾"), (2, "晚晴")):
+                await page.get_by_label("名称", exact=True).fill(name)
+                await page.get_by_role("button", name="保存草稿", exact=True).click()
+                await expect(page.get_by_text("草稿已保存", exact=True)).to_be_visible()
+                await page.get_by_role("button", name="发布草稿", exact=True).click()
+                await expect(page.get_by_text(f"已发布版本 {version}", exact=True)).to_be_visible()
+            await page.get_by_role("button", name="查看历史版本", exact=True).click()
+
+            async def delayed(route):
+                response = await route.fetch()
+                started.set()
+                await hold.wait()
+                await route.fulfill(response=response)
+                finished.set()
+
+            await page.route("**/admin/api/profile/releases/1", delayed)
+            await page.get_by_role("button", name="查看版本 1", exact=True).click()
+            await asyncio.wait_for(started.wait(), 3)
+            await page.get_by_role("button", name="查看版本 2", exact=True).click()
+            await expect(
+                page.get_by_role("heading", name="版本 2 回滚预览", exact=True)
+            ).to_be_visible()
+            hold.set()
+            await asyncio.wait_for(finished.wait(), 3)
+            await page.wait_for_timeout(100)
+            await expect(
+                page.get_by_role("heading", name="版本 2 回滚预览", exact=True)
+            ).to_be_visible()
+            await expect(
+                page.get_by_role("button", name="回滚到版本 2", exact=True)
+            ).to_be_disabled()
+        finally:
+            hold.set()
+            await browser.close()
