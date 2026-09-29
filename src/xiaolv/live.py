@@ -137,6 +137,7 @@ async def run_live(
                         mention_conversations=[
                             key for key, target in routes.items() if target.kind == "group"
                         ],
+                        quote_conversations=list(routes),
                     ),
                     delivery,
                     clock,

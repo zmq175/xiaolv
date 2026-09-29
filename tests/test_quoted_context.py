@@ -106,3 +106,26 @@ async def test_target_removed_by_metadata_budget_becomes_missing():
 async def test_unavailable_original_is_not_invented():
     context = await observe([message("latest", "对这个怎么看", "missing-id")])
     assert context["messages"][0]["replies"] == [{"status": "missing", "target_ref": None}]
+
+
+async def test_model_cannot_select_ambiguous_message_id_for_outgoing_quote():
+    class QuoteGenerator(Generator):
+        async def generate(self, *, instructions, context, schema, expires_at):
+            if "action" in schema["properties"]:
+                return '{"action":"respond"}'
+            return '{"text":"好啊","reply_to":"message_1"}'
+
+    runtime = TextRuntime(
+        ChatCompletionsModel(QuoteGenerator(), quote_conversations=["chat-1"]),
+        DeliveryService(Platform(), lambda: NOW, lambda _: 1),
+        lambda: NOW,
+    )
+    candidate = ConversationCandidate(
+        "chat-1",
+        "event-1",
+        "好啊",
+        NOW + timedelta(seconds=45),
+        1,
+        ConversationContext(1, (message("123", "原文一"), message("123", "原文二"))),
+    )
+    assert await runtime.run(candidate) == "model_error"

@@ -33,6 +33,14 @@ class _MentionReply(_Reply):
     mentions: list[str]
 
 
+class _QuoteReply(_Reply):
+    reply_to: str | None
+
+
+class _AddressedReply(_MentionReply, _QuoteReply):
+    pass
+
+
 class ChatCompletionsModel:
     def __init__(
         self,
@@ -41,6 +49,7 @@ class ChatCompletionsModel:
         profile: BotProfile | None = None,
         max_reply_chars: int = 200,
         mention_conversations: Collection[str] = (),
+        quote_conversations: Collection[str] = (),
     ) -> None:
         if type(max_reply_chars) is not int or max_reply_chars <= 0:
             raise ValueError("invalid reply length")
@@ -48,6 +57,7 @@ class ChatCompletionsModel:
         self._profile = profile if profile is not None else BotProfile()
         self._max_reply_chars = max_reply_chars
         self._mention_conversations = frozenset(mention_conversations)
+        self._quote_conversations = frozenset(quote_conversations)
 
     def _instructions(self, stage: str) -> str:
         template = files("xiaolv.prompts").joinpath(stage + ".txt").read_text(encoding="utf-8")
@@ -70,17 +80,43 @@ class ChatCompletionsModel:
     async def reply(self, candidate: ConversationCandidate) -> str | TextReply:
         context = self._context(candidate)
         enabled = candidate.conversation_id in self._mention_conversations
+        quotes = candidate.conversation_id in self._quote_conversations
+        schema_type = (
+            _AddressedReply
+            if enabled and quotes
+            else _MentionReply
+            if enabled
+            else _QuoteReply
+            if quotes
+            else _Reply
+        )
         result = await self._generator.generate(
             instructions=self._instructions("reply"),
             context=context,
-            schema=(_MentionReply if enabled else _Reply).model_json_schema(),
+            schema=schema_type.model_json_schema(),
             expires_at=candidate.expires_at,
         )
-        if not enabled:
+        if not enabled and not quotes:
             return _Reply.model_validate_json(result).text
-        reply = _MentionReply.model_validate_json(result)
-        members = {item["member_ref"]: item["account"] for item in json.loads(context)["messages"]}
-        return TextReply(reply.text, tuple(dict.fromkeys(members[ref] for ref in reply.mentions)))
+        reply = schema_type.model_validate_json(result)
+        visible = json.loads(context)["messages"]
+        mentions: tuple[str, ...] = ()
+        if isinstance(reply, _MentionReply):
+            members = {item["member_ref"]: item["account"] for item in visible}
+            mentions = tuple(dict.fromkeys(members[ref] for ref in reply.mentions))
+        reply_to = None
+        if isinstance(reply, _QuoteReply) and reply.reply_to is not None:
+            available = {item["message_ref"] for item in visible}
+            if reply.reply_to not in available:
+                raise ValueError("quote reference is not visible")
+            events = {
+                f"message_{index}": item
+                for index, item in enumerate(reversed(candidate.context.messages[-30:]), 1)
+            }
+            reply_to = events[reply.reply_to].message_id
+            if sum(item.message_id == reply_to for item in candidate.context.messages) != 1:
+                raise ValueError("quote reference is ambiguous")
+        return TextReply(reply.text, mentions, reply_to)
 
     def _context(self, candidate: ConversationCandidate) -> str:
         if any(

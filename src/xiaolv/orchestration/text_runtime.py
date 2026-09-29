@@ -36,6 +36,7 @@ class _State(TypedDict, total=False):
     decision: str
     text: str
     mentions: tuple[str, ...]
+    reply_to: str | None
 
 
 class TextRuntime:
@@ -98,6 +99,7 @@ class TextRuntime:
                 candidate.generation_epoch,
                 state["text"],
                 mentions=state.get("mentions", ()),
+                reply_to=state.get("reply_to"),
             )
         )
 
@@ -120,7 +122,12 @@ class TextRuntime:
         accounts = {item.sender_account_id for item in candidate.context.messages}
         if any(account not in accounts for account in reply.mentions):
             raise ValueError("mention target is outside conversation context")
-        return {"text": reply.text, "mentions": reply.mentions}
+        if (
+            reply.reply_to is not None
+            and sum(item.message_id == reply.reply_to for item in candidate.context.messages) != 1
+        ):
+            raise ValueError("quote target is missing or ambiguous")
+        return {"text": reply.text, "mentions": reply.mentions, "reply_to": reply.reply_to}
 
     async def _route(self, state: _State) -> str:
         return state["decision"]

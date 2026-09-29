@@ -37,6 +37,9 @@ class Services:
         self.hold = None
         self.mentions = []
         self.member_queries = []
+        self.reply_to = None
+        self.message_queries = []
+        self.drop_quote = False
 
     async def onebot(self, ws):
         self.connection = ws
@@ -56,6 +59,32 @@ class Services:
                 for frame in self.frames:
                     await ws.send(json.dumps(frame))
                 self.received.set()
+            elif request["action"] == "get_msg":
+                message_id = request["params"]["message_id"]
+                self.message_queries.append(message_id)
+                if message_id == 789:
+                    data = {
+                        "message_id": 789,
+                        "message_type": "group",
+                        "group_id": 20000,
+                        "message": self.sent[-1]["message"],
+                    }
+                    if self.drop_quote:
+                        data["message"] = [
+                            part for part in data["message"] if part["type"] != "reply"
+                        ]
+                else:
+                    data = next(frame for frame in self.frames if frame["message_id"] == message_id)
+                await ws.send(
+                    json.dumps(
+                        {
+                            "status": "ok",
+                            "retcode": 0,
+                            "echo": request["echo"],
+                            "data": data,
+                        }
+                    )
+                )
             elif request["action"] == "get_group_member_list":
                 self.member_queries.append(request["params"])
                 await ws.send(
@@ -103,6 +132,8 @@ class Services:
             )
             if "action" not in properties and (self.mentions or "mentions" in properties):
                 value["mentions"] = self.mentions
+            if "action" not in properties and (self.reply_to or "reply_to" in properties):
+                value["reply_to"] = self.reply_to
             chunks = [
                 {
                     "choices": [
@@ -214,6 +245,69 @@ async def test_online_model_selects_member_reference_for_native_mention(database
                 ],
             }
         ]
+    finally:
+        stop.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize(
+    "mentions,drop_quote,expected",
+    [
+        ([], False, "confirmed"),
+        (["member_1"], False, "confirmed"),
+        ([], True, "unknown"),
+    ],
+)
+async def test_online_model_quotes_visible_message_and_verifies_readback(
+    database_url, services, mentions, drop_quote, expected
+):
+    from xiaolv.live import LiveSummary
+
+    services.reply_to = "message_1"
+    services.mentions = mentions
+    services.drop_quote = drop_quote
+    stats = LiveSummary()
+    stop = asyncio.Event()
+    task = asyncio.create_task(run_live(settings(database_url, services), stop, statistics=stats))
+    try:
+        await until(lambda: stats.outcomes.get(expected) == 1, task)
+        stop.set()
+        await asyncio.wait_for(task, 6)
+        assert services.message_queries == [1, 789]
+        assert services.member_queries == (
+            [{"group_id": 20000, "no_cache": True}] if mentions else []
+        )
+        assert services.sent == [
+            {
+                "group_id": 20000,
+                "message": [
+                    {"type": "reply", "data": {"id": "1"}},
+                    *([{"type": "at", "data": {"qq": "10001"}}] if mentions else []),
+                    {"type": "text", "data": {"text": "我觉得先试一下。"}},
+                ],
+            }
+        ]
+    finally:
+        stop.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("reference", ["message_999", "1"])
+async def test_online_model_cannot_invent_quote_reference(database_url, services, reference):
+    from xiaolv.live import LiveSummary
+
+    services.reply_to = reference
+    stats = LiveSummary()
+    stop = asyncio.Event()
+    task = asyncio.create_task(run_live(settings(database_url, services), stop, statistics=stats))
+    try:
+        await until(lambda: stats.outcomes.get("model_error") == 1, task)
+        stop.set()
+        await asyncio.wait_for(task, 6)
+        assert services.message_queries == []
+        assert services.sent == []
     finally:
         stop.set()
         task.cancel()

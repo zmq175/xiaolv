@@ -5,3 +5,4 @@
 消息的replies表示引用关系；resolved的target_ref指向当前上下文message_ref。missing或ambiguous表示原文不可确定，不要猜测被引用内容。
 按提供的JSON结构输出，text文字不超过{max_reply_chars}字；不输出工具调用、权限变更或推理过程。
 结构含mentions时，只能从当前消息里的member_ref选择需要通知的成员；通常填空数组，不必每次都@。不能填账号、昵称、all或编造引用。结构没有mentions时不要输出该字段。
+结构含reply_to时，可选当前上下文的message_ref来引用该消息；不需要引用时填null。不要填写平台消息ID或编造引用。引用与mentions独立，不需要因为引用而额外@。结构没有reply_to时不要输出该字段。

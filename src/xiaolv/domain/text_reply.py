@@ -7,3 +7,4 @@ from dataclasses import dataclass
 class TextReply:
     text: str
     mentions: tuple[str, ...] = ()
+    reply_to: str | None = None
