@@ -10,6 +10,7 @@ from typing import Literal, Protocol, TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from xiaolv.application.delivery import DeliveryRequest, DeliveryService
+from xiaolv.domain.authorization import PermissionDenied
 from xiaolv.domain.bot_profile import ProfileSnapshot
 from xiaolv.domain.chat_event import ConversationContext
 from xiaolv.domain.context_policy import ContextOverflow
@@ -119,6 +120,8 @@ class TextRuntime:
                         },
                     )
                 state = await self._graph.ainvoke({"candidate": candidate})
+        except PermissionDenied as exc:
+            return exc.reason
         except ContextOverflow:
             return "context_overflow"
         except BudgetDenied:
@@ -145,6 +148,7 @@ class TextRuntime:
         )
 
     async def _decide(self, state: _State) -> dict[str, str]:
+        await self._delivery.require_permission(state["candidate"].conversation_id)
         decision = await self._model.decide(state["candidate"])
         logging.getLogger(__name__).info(
             "参与判断完成", extra={"event": "chat_decision", "fields": {"action": decision}}
@@ -152,6 +156,7 @@ class TextRuntime:
         return {"decision": decision}
 
     async def _reply(self, state: _State) -> _State:
+        await self._delivery.require_permission(state["candidate"].conversation_id)
         reply = await self._model.reply(state["candidate"])
         if isinstance(reply, str):
             return {"text": reply, "mentions": ()}

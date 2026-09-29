@@ -15,6 +15,7 @@ from xiaolv.application.delivery_contracts import (
     PlatformSender,
 )
 from xiaolv.application.memory_delivery import MemoryDeliveryLedger
+from xiaolv.domain.authorization import PermissionDenied
 from xiaolv.domain.text_reply import validate_text_parts
 
 __all__ = ["DeliveryRequest", "DeliveryService", "DeliveryStatus", "NotSent", "PlatformSender"]
@@ -29,10 +30,12 @@ class DeliveryService:
         *,
         ledger: DeliveryLedger | None = None,
         prepare: Callable[[DeliveryRequest], Awaitable[PlatformSender]] | None = None,
+        authorize: Callable[[str], Awaitable[bool]] | None = None,
     ) -> None:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._platform = platform
         self._prepare = prepare
+        self._authorize = authorize
         self._serial: asyncio.Lock | None = None
         if ledger is None:
             if clock is None or current_epoch is None:
@@ -90,6 +93,20 @@ class DeliveryService:
                     preparation_failed = True
             else:
                 preparation_failed = True
+        remaining = (
+            request.expires_at.astimezone(UTC) - self._clock().astimezone(UTC)
+        ).total_seconds()
+        allowed = not preparation_failed
+        if allowed and remaining > 0 and self._authorize is not None:
+            try:
+                async with asyncio.timeout(min(2, remaining)):
+                    allowed = await self._authorize(request.conversation_id)
+            except asyncio.CancelledError:
+                await asyncio.shield(self._record_not_sent(request))
+                raise
+            except Exception:  # noqa: BLE001 - fixed outcome, no backend exception details
+                allowed = False
+        # Claim after all asynchronous reads: epoch/TTL/quota must still be current.
         claim = await self._ledger.claim(request)
         if claim.status is not None:
             return claim.status
@@ -100,7 +117,7 @@ class DeliveryService:
         ).total_seconds()
         if remaining <= 0:
             return await self._ledger.finish(request.outgoing_id, claim.token, "expired")
-        if preparation_failed:
+        if not allowed:
             return await self._ledger.finish(request.outgoing_id, claim.token, "not_sent")
         result: DeliveryStatus
         try:
@@ -114,6 +131,22 @@ class DeliveryService:
         except Exception:  # noqa: BLE001 - platform may have accepted before failure
             result = "unknown"
         return await self._ledger.finish(request.outgoing_id, claim.token, result)
+
+    async def _record_not_sent(self, request: DeliveryRequest) -> None:
+        claim = await self._ledger.claim(request)
+        if claim.status is None and claim.token is not None:
+            await self._ledger.finish(request.outgoing_id, claim.token, "not_sent")
+
+    async def require_permission(self, conversation_id: str) -> None:
+        if self._authorize is None:
+            return
+        try:
+            async with asyncio.timeout(2):
+                allowed = await self._authorize(conversation_id)
+        except Exception:  # noqa: BLE001 - fixed code, never policy backend details
+            raise PermissionDenied("permission_error") from None
+        if not allowed:
+            raise PermissionDenied("permission_denied")
 
     async def status(self, outgoing_id: str) -> DeliveryStatus | None:
         return await self._ledger.status(outgoing_id)
