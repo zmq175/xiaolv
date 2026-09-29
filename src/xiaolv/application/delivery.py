@@ -75,6 +75,14 @@ class DeliveryService:
         preparation_failed = False
         try:
             validate_text_parts(request.text, request.mentions, request.parts)
+            if request.audio is not None and (
+                request.audio.conversation_id != request.conversation_id
+                or request.text
+                or request.mentions
+                or request.reply_to is not None
+                or request.parts
+            ):
+                raise ValueError("invalid audio delivery intent")
         except ValueError:
             preparation_failed = True
         if (

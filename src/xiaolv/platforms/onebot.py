@@ -1,11 +1,13 @@
 """Native OneBot sender contracts."""
 
+import base64
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
 from xiaolv.application.delivery_contracts import DeliveryRequest, NotSent
+from xiaolv.domain.audio_artifact import AudioArtifacts
 from xiaolv.domain.text_reply import TextPart
 
 
@@ -44,7 +46,14 @@ def _message_data(
 class OneBotPreparation:
     """Read-only resolution; the returned sender performs no member lookup."""
 
-    def __init__(self, rpc: OneBotRPC, routes: Mapping[str, QQTarget]) -> None:
+    def __init__(
+        self,
+        rpc: OneBotRPC,
+        routes: Mapping[str, QQTarget],
+        *,
+        artifacts: AudioArtifacts | None = None,
+    ) -> None:
+        self._artifacts = artifacts
         self._rpc = rpc
         self._routes = dict(routes)
 
@@ -57,6 +66,13 @@ class OneBotPreparation:
             or target.id <= 0
         ):
             raise NotSent("conversation route is unavailable")
+        if request.audio is not None:
+            if self._artifacts is None or request.audio.conversation_id != request.conversation_id:
+                raise NotSent("audio artifact unavailable")
+            audio = await self._artifacts.read(request.audio)
+            return OneBotSender(
+                self._rpc, self._routes, audio_content={request.audio.sha256: audio}
+            )
         if request.mentions and (
             target.kind != "group"
             or any(re.fullmatch(r"qq:[1-9][0-9]*", member) is None for member in request.mentions)
@@ -120,12 +136,14 @@ class OneBotSender:
         member_accounts: Mapping[str, Mapping[str, int]] | None = None,
         reply_messages: Mapping[str, Mapping[str, int]] | None = None,
         verify_quotes: bool = False,
+        audio_content: Mapping[str, bytes] | None = None,
     ) -> None:
         self._rpc = rpc
         self._routes = dict(routes)
         self._members = {key: dict(value) for key, value in (member_accounts or {}).items()}
         self._replies = {key: dict(value) for key, value in (reply_messages or {}).items()}
         self._verify_quotes = verify_quotes
+        self._audio = dict(audio_content or {})
 
     async def send(self, request: DeliveryRequest) -> Literal["confirmed", "unknown"]:
         target = self._routes.get(request.conversation_id)
@@ -156,6 +174,16 @@ class OneBotSender:
             if target.kind != "group" or member == "all" or type(qq) is not int or qq <= 0:
                 raise NotSent("mention target is unavailable or not authorized")
             segments.append({"type": "at", "data": {"qq": str(qq)}})
+        if request.audio is not None:
+            audio = self._audio.get(request.audio.sha256)
+            if audio is None:
+                raise NotSent("audio artifact was not prepared")
+            segments = [
+                {
+                    "type": "record",
+                    "data": {"file": "base64://" + base64.b64encode(audio).decode("ascii")},
+                }
+            ]
         response = await self._rpc.call(
             f"send_{target.kind}_msg",
             {

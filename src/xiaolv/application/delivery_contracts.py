@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, Protocol
 
+from xiaolv.domain.audio_artifact import AudioArtifact
 from xiaolv.domain.text_reply import TextPart
 
 DeliveryStatus = Literal[
@@ -21,6 +22,7 @@ class DeliveryRequest:
     mentions: tuple[str, ...] = ()
     reply_to: str | None = None
     parts: tuple[TextPart, ...] = ()
+    audio: AudioArtifact | None = None
 
 
 @dataclass(frozen=True)

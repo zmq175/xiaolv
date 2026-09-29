@@ -33,3 +33,11 @@ FishAudioProvider使用官方SDK的convert与RequestOptions；应用只包装HTT
 首轮显式请求WAV，使用标准库wave验证非空、帧数完整及不超过20秒。仅支持标准库可读取的有限长度PCM WAV；真实服务是否返回未知长度流式头尚待供应商样本验证，当前遇到这种样本拒绝，不宣称全格式兼容。SnowLuma端平台codec转换与QQ实际播放仍待验收。
 
 音色采用不可变副本的逻辑名映射，模型参数显式传入。SDK成功不等于费用已结算，SpeechResult.charged_amount保持None，持久账本保留预留等待核对。测试从TextRuntime进入，真实PG认领/费用保护，外部合成httpx transport与分发替身；未调用付费服务，也未接真实语音发送。
+
+## 原生音频分发落点
+
+合成完成后先生成会话内AudioArtifact，再交给DeliveryService。DeliveryRequest只携带artifact标识、内容摘要和会话绑定，outbox保存引用以验证重复payload，不存base64音频。本地受控目录按会话摘要分区、内容摘要寻址；读取验证大小与摘要，模型不能提供文件路径或URL。OneBot只读prepare加载音频，最终发送认领之后生成原生record段；仅在平台边界编码base64，避免要求业务进程与SnowLuma共享磁盘。费用合成始终位于prepare之外。
+
+首个产物实现为本地存储，后续部署必须明确磁盘配额与过期清理；原回合过期/epoch失效/撤权仍由最终DeliveryService判断。artifact与文字/@/引用互斥，未知回执保持unknown且不回退或重发。测试沿用聊天入口和DeliveryService，真实PG、临时文件目录及假OneBot RPC，禁止直接查询内部表作断言。
+
+本轮LocalAudioArtifacts提供显式cleanup(before)维护接口；尚未在线调度。并发写入/清理互斥及临时文件回收未实现，接生产前补齐；当前清理仅在暂停合成后的独占维护窗口执行。音频存储没有跨主机共享要求；业务多实例须共享产物根目录或改接对象存储实现。

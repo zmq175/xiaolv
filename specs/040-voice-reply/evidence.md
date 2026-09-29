@@ -37,3 +37,15 @@
 语音相关专项29 passed in 4.96s；ruff/format及mypy（54源文件）通过。供应商WAV样本、在线参数绑定、语音产物存储、最终原生出口、真实价格及账单核对仍待实现/验收，不能称在线语音已可用。
 
 本轮完整回归526 passed in 171.11s，无跳过，包含既有PG、浏览器与在线合成链路；未调用真实供应商。
+
+## 音频产物与最终原生发送
+
+2026-09-30，继续沿用聊天入口与DeliveryService测试边界，新增test_voice_delivery.py。第一个聊天测试缺少VoiceDispatch而红；新增会话分区、内容摘要寻址的本地音频产物、只读准备和原生OneBot record后通过。原始语音字节仅在平台边界转base64；模型、outbox及业务日志不保存base64。SnowLuma固定源码loadPtt明确含base64路径，但实际codec/QQ播放仍未验收。
+
+发送层独立重建测试暴露outbox未保存audio而报payload conflict；迁移0014保存AudioArtifact JSON并参与完整请求比较后，unknown重建仍unknown且不再调用平台，修改音频则明确冲突。混合文字/mentions/quote和跨会话音频测试起初可发送，统一DeliveryService校验后全部not_sent。音频读取后出现新epoch的回归首次通过，最终PG认领返回superseded、平台零请求。
+
+清理测试起初缺少cleanup；新增按文件修改时间清理后，旧产物通过DeliveryService返回not_sent、新产物仍可发送。当前清理是显式维护接口，尚未接定时任务；部署时先只允许暂停合成后的独占维护，在线并发清理与写入互斥、遗留临时文件回收、磁盘总量配额仍待补齐。产物丢失或校验失败关闭发送，不触发重新合成。测试只用临时目录/合成音频/假RPC与真实本地PG，不等于真实SnowLuma发送。
+
+首轮专项5 passed in 0.67s；ruff及mypy（57源文件）通过。VoiceDispatch尚未接run_live；需要完成运行配置、定时清理、价格/账单核对及真实平台验收后才可开放。
+
+本轮完整回归531 passed in 169.32s，无跳过；ruff/format、mypy57源文件通过。

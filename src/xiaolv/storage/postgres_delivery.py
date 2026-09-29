@@ -10,6 +10,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
 from xiaolv.application.delivery_contracts import DeliveryClaim, DeliveryRequest, DeliveryStatus
+from xiaolv.domain.audio_artifact import AudioArtifact
 from xiaolv.domain.conversation.reply_validity import evaluate_reply_validity
 from xiaolv.domain.delivery_policy import DeliveryPolicy
 from xiaolv.domain.text_reply import TextPart
@@ -104,6 +105,7 @@ class PostgresDeliveryLedger:
                     tuple(row["mentions"]),
                     row["reply_to"],
                     tuple(TextPart(**part) for part in row["parts"]),
+                    AudioArtifact(**row["audio"]) if row["audio"] is not None else None,
                 )
                 if stored != request:
                     raise ValueError("outgoing_id payload conflict")
@@ -135,15 +137,16 @@ class PostgresDeliveryLedger:
             await connection.execute(
                 text("""
                 INSERT INTO app.outbox (outgoing_id, conversation_id, expires_at,
-                    generation_epoch, body, mentions, reply_to, parts, status, attempt_token, lease_until)
+                    generation_epoch, body, mentions, reply_to, parts, audio, status, attempt_token, lease_until)
                 VALUES (:outgoing_id, :conversation_id, :expires_at, :generation_epoch,
                     :text, CAST(:mentions_json AS jsonb), :reply_to, CAST(:parts_json AS jsonb),
-                    :status, :token, clock_timestamp() + :lease * interval '1 second')
+                    CAST(:audio_json AS jsonb), :status, :token, clock_timestamp() + :lease * interval '1 second')
             """),
                 {
                     **asdict(request),
                     "mentions_json": json.dumps(request.mentions),
                     "parts_json": json.dumps([asdict(part) for part in request.parts]),
+                    "audio_json": json.dumps(asdict(request.audio)) if request.audio else None,
                     "token": token,
                     "lease": self._lease_seconds,
                     "status": terminal or "sending",
