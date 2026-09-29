@@ -44,4 +44,6 @@
 
 | [039 持久会话控制](039-conversation-control/spec.md) | Verified | 管理HTTP/浏览器开关、持久停用、旧回合及候选失效、跨进程时序与失败恢复 |
 
+| [040 语音回复闭环](040-voice-reply/spec.md) | Design | 官方Fish SDK合成探针已核验；LLM媒介选择、持久合成与原生语音发送待实现 |
+
 Verified仅表示该规格明示范围通过验证，不代表完整首版或真实QQ上线验收。每个规格包含spec.md、plan.md、evidence.md。开发流程见CONTRIBUTING.md。
