@@ -29,6 +29,7 @@ from xiaolv.settings import ConfigError, Settings
 from xiaolv.storage.postgres_budget import PostgresModelBudget
 from xiaolv.storage.postgres_delivery import PostgresDeliveryLedger
 from xiaolv.storage.postgres_inbox import PostgresInbox
+from xiaolv.storage.postgres_model_capacity import PostgresModelCapacity
 from xiaolv.storage.postgres_turns import CandidatePolicy, PostgresTurns
 
 
@@ -85,6 +86,11 @@ async def run_live(
     try:
         await _check_schema(engine)
         budget = PostgresModelBudget(engine, policy)
+        capacity = PostgresModelCapacity(engine, "chat-model", settings.model_concurrency)
+        try:
+            await capacity.initialize()
+        except ValueError:
+            raise ConfigError("shared model capacity configuration conflict") from None
         async with (
             ChatCompletionsGateway(
                 base_url=_required(settings.model_base_url),
@@ -92,6 +98,7 @@ async def run_live(
                 model=_required(settings.model_id),
                 concurrency=settings.model_concurrency,
                 budget=budget,
+                shared_capacity=capacity,
                 usage_sink=_log_model_usage,
             ) as gateway,
             OneBotWebSocket(

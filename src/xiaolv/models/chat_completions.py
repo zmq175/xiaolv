@@ -3,6 +3,7 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from math import isfinite
 from types import TracebackType
@@ -15,6 +16,7 @@ from openai import AsyncOpenAI, AsyncStream
 from opentelemetry import trace
 
 from xiaolv.domain.model_budget import ModelBudget, ModelCallIntent
+from xiaolv.domain.model_capacity import ModelCapacity
 from xiaolv.domain.model_usage import ModelCallReport, TokenUsage
 
 
@@ -32,6 +34,7 @@ class ChatCompletionsGateway:
         max_response_bytes: int = 65536,
         usage_sink: Callable[[ModelCallReport], Awaitable[None]] | None = None,
         budget: ModelBudget | None = None,
+        shared_capacity: ModelCapacity | None = None,
     ) -> None:
         if not all(
             isinstance(value, str) and value.strip() for value in (base_url, api_key, model)
@@ -88,6 +91,7 @@ class ChatCompletionsGateway:
         self._max_response_bytes = max_response_bytes
         self._usage_sink = usage_sink
         self._budget = budget
+        self._shared_capacity = shared_capacity
 
     async def _bound_response(self, response: httpx.Response) -> None:
         if response.headers.get("content-encoding", "identity").lower() != "identity":
@@ -122,41 +126,47 @@ class ChatCompletionsGateway:
         if remaining <= 0:
             raise TimeoutError("model deadline expired")
         async with asyncio.timeout(remaining), self._slots:
-            started_at = datetime.now(UTC)
             call_id = uuid4().hex
-            if self._budget is not None:
-                encoded = json.dumps(
-                    {"instructions": instructions, "context": context, "schema": schema},
-                    ensure_ascii=False,
-                ).encode("utf-8")
-                await self._budget.reserve(
-                    ModelCallIntent(call_id, self._model, started_at, len(encoded) + 1024, 512)
-                )
-            usage = None
-            status: Literal["completed", "failed", "cancelled"] = "failed"
-            try:
-                output, usage = await self._generate(
-                    instructions=instructions, context=context, schema=schema
-                )
-                status = "completed"
-                return output
-            except asyncio.CancelledError:
-                status = "cancelled"
-                raise
-            finally:
-                if self._usage_sink is not None or self._budget is not None:
-                    await asyncio.shield(
-                        self._record(
-                            ModelCallReport(
-                                call_id,
-                                self._model,
-                                started_at,
-                                datetime.now(UTC),
-                                status,
-                                usage,
+            permit = (
+                self._shared_capacity.hold(call_id, expires_at)
+                if self._shared_capacity is not None
+                else nullcontext()
+            )
+            async with permit:
+                started_at = datetime.now(UTC)
+                if self._budget is not None:
+                    encoded = json.dumps(
+                        {"instructions": instructions, "context": context, "schema": schema},
+                        ensure_ascii=False,
+                    ).encode("utf-8")
+                    await self._budget.reserve(
+                        ModelCallIntent(call_id, self._model, started_at, len(encoded) + 1024, 512)
+                    )
+                usage = None
+                status: Literal["completed", "failed", "cancelled"] = "failed"
+                try:
+                    output, usage = await self._generate(
+                        instructions=instructions, context=context, schema=schema
+                    )
+                    status = "completed"
+                    return output
+                except asyncio.CancelledError:
+                    status = "cancelled"
+                    raise
+                finally:
+                    if self._usage_sink is not None or self._budget is not None:
+                        await asyncio.shield(
+                            self._record(
+                                ModelCallReport(
+                                    call_id,
+                                    self._model,
+                                    started_at,
+                                    datetime.now(UTC),
+                                    status,
+                                    usage,
+                                )
                             )
                         )
-                    )
 
     async def _record(self, report: ModelCallReport) -> None:
         async with asyncio.timeout(2):

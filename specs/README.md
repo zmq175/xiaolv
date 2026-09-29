@@ -33,5 +33,6 @@
 | [024 模型引用发送](024-model-quotes/spec.md) | Verified | 模型选择、会话目标核实、原生引用与读回核对；真实QQ待验收 |
 | [025 会话发送配额](025-delivery-quota/spec.md) | Verified | PG冷却/滚动窗口、跨实例竞争、重启/回滚与在线限流终态 |
 | [026 调用前配额预判](026-quota-preflight/spec.md) | Verified | 已限流回合跳过模型、只读预判不预留、最终认领防并发穿透 |
+| [027 共享模型并发](027-shared-model-capacity/spec.md) | Verified | PG共享名额、等待不计费、取消释放、配置冲突与真实SIGKILL恢复 |
 
 Verified仅表示该规格明示范围通过验证，不代表完整首版或真实QQ上线验收。每个规格包含spec.md、plan.md、evidence.md。开发流程见CONTRIBUTING.md。
