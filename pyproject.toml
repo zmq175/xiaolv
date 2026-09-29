@@ -6,12 +6,15 @@ readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "alembic>=1,<2",
+    "anyio>=4,<5",
+    "fastapi>=0.115,<1",
     "httpx2>=2,<3",
     "langgraph>=1,<2",
     "openai>=3,<4",
     "opentelemetry-api>=1,<2",
     "opentelemetry-sdk>=1,<2",
     "psycopg[binary]>=3,<4",
+    "pwdlib[argon2]>=0.3,<1",
     "pydantic>=2,<3",
     "sqlalchemy[asyncio]>=2,<3",
     "websockets>=16,<17",
