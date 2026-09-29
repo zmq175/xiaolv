@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, Protocol
 
+from xiaolv.domain.text_reply import TextPart
+
 DeliveryStatus = Literal[
     "confirmed", "unknown", "expired", "superseded", "not_sent", "sending", "rate_limited"
 ]
@@ -18,6 +20,7 @@ class DeliveryRequest:
     text: str
     mentions: tuple[str, ...] = ()
     reply_to: str | None = None
+    parts: tuple[TextPart, ...] = ()
 
 
 @dataclass(frozen=True)

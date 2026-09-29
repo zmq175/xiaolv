@@ -12,7 +12,7 @@ from langgraph.graph import END, START, StateGraph
 from xiaolv.application.delivery import DeliveryRequest, DeliveryService
 from xiaolv.domain.chat_event import ConversationContext
 from xiaolv.domain.model_budget import BudgetDenied
-from xiaolv.domain.text_reply import TextReply
+from xiaolv.domain.text_reply import TextPart, TextReply, validate_text_parts
 
 
 @dataclass(frozen=True)
@@ -37,6 +37,7 @@ class _State(TypedDict, total=False):
     text: str
     mentions: tuple[str, ...]
     reply_to: str | None
+    parts: tuple[TextPart, ...]
 
 
 class TextRuntime:
@@ -110,6 +111,7 @@ class TextRuntime:
                 state["text"],
                 mentions=state.get("mentions", ()),
                 reply_to=state.get("reply_to"),
+                parts=state.get("parts", ()),
             )
         )
 
@@ -125,6 +127,7 @@ class TextRuntime:
         if isinstance(reply, str):
             return {"text": reply, "mentions": ()}
         candidate = state["candidate"]
+        validate_text_parts(reply.text, reply.mentions, reply.parts)
         if any(
             item.conversation_id != candidate.conversation_id for item in candidate.context.messages
         ):
@@ -137,7 +140,12 @@ class TextRuntime:
             and sum(item.message_id == reply.reply_to for item in candidate.context.messages) != 1
         ):
             raise ValueError("quote target is missing or ambiguous")
-        return {"text": reply.text, "mentions": reply.mentions, "reply_to": reply.reply_to}
+        return {
+            "text": reply.text,
+            "mentions": reply.mentions,
+            "reply_to": reply.reply_to,
+            "parts": reply.parts,
+        }
 
     async def _route(self, state: _State) -> str:
         return state["decision"]

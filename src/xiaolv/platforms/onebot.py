@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Literal, Protocol
 
 from xiaolv.application.delivery_contracts import DeliveryRequest, NotSent
+from xiaolv.domain.text_reply import TextPart
 
 
 class OneBotRPC(Protocol):
@@ -142,12 +143,19 @@ class OneBotSender:
                 raise NotSent("reply target is unavailable")
             segments.append({"type": "reply", "data": {"id": str(message_id)}})
         members = self._members.get(request.conversation_id, {})
-        for member in dict.fromkeys(request.mentions):
+        content_parts = request.parts or (
+            *(TextPart("mention", member) for member in dict.fromkeys(request.mentions)),
+            TextPart("text", request.text),
+        )
+        for part in content_parts:
+            if part.kind == "text":
+                segments.append({"type": "text", "data": {"text": part.value}})
+                continue
+            member = part.value
             qq = members.get(member)
             if target.kind != "group" or member == "all" or type(qq) is not int or qq <= 0:
                 raise NotSent("mention target is unavailable or not authorized")
             segments.append({"type": "at", "data": {"qq": str(qq)}})
-        segments.append({"type": "text", "data": {"text": request.text}})
         response = await self._rpc.call(
             f"send_{target.kind}_msg",
             {

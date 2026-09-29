@@ -15,6 +15,7 @@ from xiaolv.application.delivery_contracts import (
     PlatformSender,
 )
 from xiaolv.application.memory_delivery import MemoryDeliveryLedger
+from xiaolv.domain.text_reply import validate_text_parts
 
 __all__ = ["DeliveryRequest", "DeliveryService", "DeliveryStatus", "NotSent", "PlatformSender"]
 
@@ -69,7 +70,15 @@ class DeliveryService:
     async def _deliver(self, request: DeliveryRequest) -> DeliveryStatus:
         platform = self._platform
         preparation_failed = False
-        if self._prepare is not None and await self._ledger.status(request.outgoing_id) is None:
+        try:
+            validate_text_parts(request.text, request.mentions, request.parts)
+        except ValueError:
+            preparation_failed = True
+        if (
+            not preparation_failed
+            and self._prepare is not None
+            and await self._ledger.status(request.outgoing_id) is None
+        ):
             remaining = (
                 request.expires_at.astimezone(UTC) - self._clock().astimezone(UTC)
             ).total_seconds()
