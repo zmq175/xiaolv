@@ -746,3 +746,28 @@ async def test_live_uses_configured_persona_and_reply_limit(database_url, servic
         stop.set()
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_live_quota_drops_next_reply_instead_of_queueing_it(database_url, services):
+    from xiaolv.live import LiveSummary
+
+    stats = LiveSummary()
+    stop = asyncio.Event()
+    configured = settings(
+        database_url,
+        services,
+        XIAOLV_DELIVERY_POLICY='{"cooldown_seconds":0,"window_seconds":60,"max_messages":1}',
+    )
+    task = asyncio.create_task(run_live(configured, stop, statistics=stats))
+    try:
+        await until(lambda: stats.outcomes.get("confirmed") == 1, task)
+        await services.connection.send(json.dumps(message(message_id=2, content="还有呢？")))
+        await until(lambda: stats.outcomes.get("rate_limited") == 1, task)
+        stop.set()
+        summary = await asyncio.wait_for(task, 6)
+        assert summary.outcomes == {"confirmed": 1, "rate_limited": 1}
+        assert len(services.sent) == 1
+    finally:
+        stop.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)

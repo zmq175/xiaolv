@@ -112,7 +112,7 @@ async def run_live(
                 raise LiveRuntimeError("onebot_account_mismatch")
             delivery = DeliveryService(
                 OneBotSender(rpc, routes),
-                ledger=PostgresDeliveryLedger(engine),
+                ledger=PostgresDeliveryLedger(engine, policy=settings.delivery_policy),
                 prepare=OneBotPreparation(rpc, routes),
             )
             incoming = IncomingMessages(

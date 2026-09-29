@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, ValidationError, model_validator
 
 from xiaolv.domain.bot_profile import BotProfile
+from xiaolv.domain.delivery_policy import DeliveryPolicy
 
 Money = Annotated[Decimal, Field(ge=0, max_digits=20, decimal_places=6, allow_inf_nan=False)]
 QQId = Annotated[int, Field(strict=True, gt=0)]
@@ -27,6 +28,7 @@ class Settings(BaseModel):
     log_max_bytes: int = Field(default=20 * 1024 * 1024, ge=1024)
     log_backup_count: int = Field(default=5, ge=1, le=100)
     bot_profile: BotProfile = Field(default_factory=BotProfile)
+    delivery_policy: DeliveryPolicy = Field(default_factory=DeliveryPolicy)
     mode: Literal["replay", "live"] = "replay"
     database_url: SecretStr | None = None
     model_base_url: str | None = None
@@ -114,7 +116,7 @@ def load_settings(environ: Mapping[str, str]) -> Settings:
         for key, value in environ.items()
         if key.startswith("XIAOLV_")
     }
-    for name in ("enabled_group_ids", "enabled_private_ids", "bot_profile"):
+    for name in ("enabled_group_ids", "enabled_private_ids", "bot_profile", "delivery_policy"):
         key = "XIAOLV_" + name.upper()
         if key in environ:
             try:

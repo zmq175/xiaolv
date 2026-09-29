@@ -393,3 +393,179 @@ async def test_database_epoch_is_rechecked_after_preparation(database_url):
         assert platform.sent == []
     finally:
         await engine.dispose()
+
+
+async def test_shared_quota_allows_only_one_competing_outgoing_message(database_url):
+    import asyncio
+    from dataclasses import replace
+
+    from xiaolv.domain.delivery_policy import DeliveryPolicy
+
+    platform = RecordingPlatform()
+    engines = [create_async_engine(database_url, hide_parameters=True) for _ in range(4)]
+    try:
+        services = [
+            DeliveryService(
+                platform,
+                ledger=PostgresDeliveryLedger(
+                    engine,
+                    policy=DeliveryPolicy(cooldown_seconds=0, window_seconds=60, max_messages=1),
+                ),
+            )
+            for engine in engines
+        ]
+        request = outgoing(await services[0].start_turn("chat-1"))
+        results = await asyncio.gather(
+            *(
+                service.deliver(replace(request, outgoing_id=f"out-{index}"))
+                for index, service in enumerate(services)
+            )
+        )
+        assert sorted(results) == ["confirmed", "rate_limited", "rate_limited", "rate_limited"]
+        assert len(platform.sent) == 1
+    finally:
+        for engine in engines:
+            await engine.dispose()
+
+
+async def test_quota_survives_restart_and_unknown_receipt_but_not_explicit_rejection(database_url):
+    from dataclasses import replace
+
+    from xiaolv.application.delivery import NotSent
+    from xiaolv.domain.delivery_policy import DeliveryPolicy
+
+    class OutcomePlatform(RecordingPlatform):
+        def __init__(self):
+            super().__init__()
+            self.reject = True
+
+        async def send(self, request):
+            if self.reject:
+                raise NotSent("not accepted")
+            self.sent.append(request)
+            return "unknown"
+
+    platform = OutcomePlatform()
+    policy = DeliveryPolicy(cooldown_seconds=0, window_seconds=60, max_messages=1)
+    engine = create_async_engine(database_url, hide_parameters=True)
+    try:
+        service = DeliveryService(platform, ledger=PostgresDeliveryLedger(engine, policy=policy))
+        request = outgoing(await service.start_turn("chat-1"))
+        assert await service.deliver(request) == "not_sent"
+        platform.reject = False
+        accepted = replace(request, outgoing_id="out-2")
+        assert await service.deliver(accepted) == "unknown"
+    finally:
+        await engine.dispose()
+    engine = create_async_engine(database_url, hide_parameters=True)
+    try:
+        restarted = DeliveryService(platform, ledger=PostgresDeliveryLedger(engine, policy=policy))
+        assert await restarted.deliver(accepted) == "unknown"
+        assert await restarted.deliver(replace(request, outgoing_id="out-3")) == "rate_limited"
+        assert platform.sent == [accepted]
+        other = replace(
+            request,
+            outgoing_id="other",
+            conversation_id="chat-2",
+            generation_epoch=await restarted.start_turn("chat-2"),
+        )
+        assert await restarted.deliver(other) == "unknown"
+        assert platform.sent == [accepted, other]
+    finally:
+        await engine.dispose()
+
+
+async def test_cooldown_expires_without_replaying_rejected_message(database_url):
+    import asyncio
+    from dataclasses import replace
+
+    from xiaolv.domain.delivery_policy import DeliveryPolicy
+
+    engine = create_async_engine(database_url, hide_parameters=True)
+    platform = RecordingPlatform()
+    try:
+        service = DeliveryService(
+            platform,
+            ledger=PostgresDeliveryLedger(
+                engine,
+                policy=DeliveryPolicy(cooldown_seconds=0.15, window_seconds=60, max_messages=6),
+            ),
+        )
+        request = outgoing(await service.start_turn("chat-1"))
+        assert await service.deliver(request) == "confirmed"
+        rejected = replace(request, outgoing_id="out-2")
+        assert await service.deliver(rejected) == "rate_limited"
+        await asyncio.sleep(0.2)
+        assert await service.deliver(rejected) == "rate_limited"
+        fresh = replace(request, outgoing_id="out-3")
+        assert await service.deliver(fresh) == "confirmed"
+        assert platform.sent == [request, fresh]
+    finally:
+        await engine.dispose()
+
+
+async def test_window_expiry_releases_allowance_for_new_messages(database_url):
+    import asyncio
+    from dataclasses import replace
+
+    from xiaolv.domain.delivery_policy import DeliveryPolicy
+
+    engine = create_async_engine(database_url, hide_parameters=True)
+    platform = RecordingPlatform()
+    try:
+        service = DeliveryService(
+            platform,
+            ledger=PostgresDeliveryLedger(
+                engine,
+                policy=DeliveryPolicy(cooldown_seconds=0, window_seconds=0.15, max_messages=1),
+            ),
+        )
+        request = outgoing(await service.start_turn("chat-1"))
+        assert await service.deliver(request) == "confirmed"
+        assert await service.deliver(replace(request, outgoing_id="out-2")) == "rate_limited"
+        await asyncio.sleep(0.2)
+        assert await service.deliver(replace(request, outgoing_id="out-3")) == "confirmed"
+        assert len(platform.sent) == 2
+    finally:
+        await engine.dispose()
+
+
+async def test_quota_migration_rollback_preserves_rejection_without_resend(database_url):
+    from dataclasses import replace
+
+    from alembic import command
+    from alembic.config import Config
+
+    from xiaolv.domain.delivery_policy import DeliveryPolicy
+
+    engine = create_async_engine(database_url, hide_parameters=True)
+    platform = RecordingPlatform()
+    try:
+        service = DeliveryService(
+            platform,
+            ledger=PostgresDeliveryLedger(
+                engine, policy=DeliveryPolicy(cooldown_seconds=0, max_messages=1)
+            ),
+        )
+        request = outgoing(await service.start_turn("chat-1"))
+        assert await service.deliver(request) == "confirmed"
+        rejected = replace(request, outgoing_id="out-2")
+        assert await service.deliver(rejected) == "rate_limited"
+
+        def migrate(connection, downgrade):
+            config = Config("alembic.ini")
+            config.attributes["connection"] = connection
+            if downgrade:
+                command.downgrade(config, "0006_reply_to")
+            else:
+                command.upgrade(config, "head")
+
+        async with engine.begin() as connection:
+            await connection.run_sync(migrate, True)
+            await connection.run_sync(migrate, False)
+        restarted = DeliveryService(platform, ledger=PostgresDeliveryLedger(engine))
+        assert await restarted.deliver(request) == "confirmed"
+        assert await restarted.deliver(rejected) == "not_sent"
+        assert platform.sent == [request]
+    finally:
+        await engine.dispose()

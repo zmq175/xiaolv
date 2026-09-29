@@ -4,7 +4,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal, Protocol
 
-DeliveryStatus = Literal["confirmed", "unknown", "expired", "superseded", "not_sent", "sending"]
+DeliveryStatus = Literal[
+    "confirmed", "unknown", "expired", "superseded", "not_sent", "sending", "rate_limited"
+]
 
 
 @dataclass(frozen=True)

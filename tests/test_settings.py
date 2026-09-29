@@ -18,6 +18,16 @@ def test_environment_can_override_runtime_limits():
     assert settings.model_concurrency == 3
 
 
+def test_delivery_quota_defaults_and_explicit_configuration():
+    assert load_settings({}).delivery_policy.max_messages == 6
+    configured = load_settings(
+        {"XIAOLV_DELIVERY_POLICY": '{"cooldown_seconds":2,"window_seconds":30,"max_messages":3}'}
+    )
+    assert configured.delivery_policy.cooldown_seconds == 2
+    assert configured.delivery_policy.window_seconds == 30
+    assert configured.delivery_policy.max_messages == 3
+
+
 @pytest.mark.parametrize(
     "key,value",
     [
@@ -235,3 +245,23 @@ def test_invalid_log_settings_are_rejected(key, value):
 
     with pytest.raises(ConfigError):
         load_settings({"XIAOLV_" + key: value})
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        '{"cooldown_seconds":-1}',
+        '{"window_seconds":0}',
+        '{"window_seconds":"nan"}',
+        '{"max_messages":0}',
+        '{"max_messages":true}',
+        '{"unknown":1}',
+        "null",
+        "not-json",
+    ],
+)
+def test_invalid_delivery_policy_is_rejected(policy):
+    from xiaolv.settings import ConfigError
+
+    with pytest.raises(ConfigError):
+        load_settings({"XIAOLV_DELIVERY_POLICY": policy})

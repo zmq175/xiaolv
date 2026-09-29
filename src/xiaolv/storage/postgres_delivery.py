@@ -11,12 +11,20 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from xiaolv.application.delivery_contracts import DeliveryClaim, DeliveryRequest, DeliveryStatus
 from xiaolv.domain.conversation.reply_validity import evaluate_reply_validity
+from xiaolv.domain.delivery_policy import DeliveryPolicy
 
 
 class PostgresDeliveryLedger:
-    def __init__(self, engine: AsyncEngine, lease_seconds: float = 15) -> None:
+    def __init__(
+        self,
+        engine: AsyncEngine,
+        lease_seconds: float = 15,
+        *,
+        policy: DeliveryPolicy | None = None,
+    ) -> None:
         self._engine = engine
         self._lease_seconds = lease_seconds
+        self._policy = policy
 
     async def start_turn(self, conversation_id: str) -> int:
         async with self._engine.begin() as connection:
@@ -66,6 +74,37 @@ class PostgresDeliveryLedger:
             terminal: DeliveryStatus | None = None
             if decision.reason in ("expired", "superseded"):
                 terminal = decision.reason
+            if terminal is None and self._policy is not None:
+                quota = (
+                    (
+                        await connection.execute(
+                            text("""
+                    SELECT count(*) FILTER (WHERE claimed_at > :now - :window * interval '1 second') AS used,
+                           max(claimed_at) AS latest
+                    FROM app.outbox
+                    WHERE conversation_id = :conversation_id
+                      AND status IN ('sending', 'confirmed', 'unknown')
+                      AND claimed_at > :now - :horizon * interval '1 second'
+                """),
+                            {
+                                "now": now,
+                                "window": self._policy.window_seconds,
+                                "horizon": max(
+                                    self._policy.window_seconds, self._policy.cooldown_seconds
+                                ),
+                                "conversation_id": request.conversation_id,
+                            },
+                        )
+                    )
+                    .mappings()
+                    .one()
+                )
+                latest = quota["latest"]
+                if quota["used"] >= self._policy.max_messages or (
+                    latest is not None
+                    and (now - latest).total_seconds() < self._policy.cooldown_seconds
+                ):
+                    terminal = "rate_limited"
             token = uuid4().hex
             await connection.execute(
                 text("""
