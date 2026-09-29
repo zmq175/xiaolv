@@ -339,3 +339,19 @@ def test_invalid_voice_binding_fails_before_service_start(tmp_path, change):
     with pytest.raises(ConfigError) as raised:
         load_settings(env)
     assert "synthetic-tts-secret" not in str(raised.value)
+
+
+@pytest.mark.parametrize("scope", ["qq:10000:group:30000", "qq:99999:group:20000"])
+def test_native_asr_cannot_enable_an_unconfigured_conversation(scope):
+    import json
+
+    from xiaolv.settings import ConfigError
+
+    with pytest.raises(ConfigError):
+        load_settings(
+            {
+                "XIAOLV_QQ_SELF_ID": "10000",
+                "XIAOLV_ENABLED_GROUP_IDS": "[20000]",
+                "XIAOLV_NATIVE_ASR_CONVERSATIONS": json.dumps([scope]),
+            }
+        )

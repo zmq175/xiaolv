@@ -10,6 +10,7 @@ from typing import Literal, Protocol, TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from xiaolv.application.delivery import DeliveryRequest, DeliveryService
+from xiaolv.application.inbound_speech import InboundSpeech, MediaUnavailable
 from xiaolv.domain.authorization import PermissionDenied
 from xiaolv.domain.bot_profile import ProfileSnapshot
 from xiaolv.domain.chat_event import ConversationContext
@@ -69,10 +70,12 @@ class TextRuntime:
         max_chars: int = 200,
         profile_loader: Callable[[], Awaitable[ProfileSnapshot]] | None = None,
         voice_delivery: VoiceDelivery | None = None,
+        inbound_speech: InboundSpeech | None = None,
     ) -> None:
         self._locks: dict[str, asyncio.Lock] = {}
         self._model = model
         self._voice_delivery = voice_delivery
+        self._inbound_speech = inbound_speech
         self._profile_loader = profile_loader
         self._delivery = delivery
         self._clock = clock
@@ -166,10 +169,16 @@ class TextRuntime:
             return exc.reason
         except ContextOverflow:
             return "context_overflow"
+        except MediaUnavailable:
+            return "media_error"
         except BudgetDenied:
             return "budget_denied"
         except TimeoutError:
-            return "expired" if deadline.expired() else "model_error"
+            return (
+                "expired"
+                if deadline.expired() or self._clock() >= candidate.expires_at
+                else "model_error"
+            )
         except Exception:  # noqa: BLE001 - graph/model failure is a terminal replay outcome
             return "model_error"
         if state["decision"] == "silence":
@@ -199,6 +208,11 @@ class TextRuntime:
 
     async def _reply(self, state: _State) -> _State:
         await self._delivery.require_permission(state["candidate"].conversation_id)
+        if self._inbound_speech is not None:
+            state["candidate"] = await self._inbound_speech.enrich(state["candidate"])
+            await self._delivery.require_permission(state["candidate"].conversation_id)
+            if self._clock() >= state["candidate"].expires_at:
+                raise TimeoutError()
         reply = await self._model.reply(state["candidate"])
         if isinstance(reply, VoiceReply):
             return {"voice": reply}

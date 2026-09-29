@@ -42,6 +42,10 @@ class Services:
         self.drop_quote = False
         self.parts = None
         self.voice = None
+        self.transcriptions = []
+        self.message_override = None
+        self.transcript = "周六下午三点见。"
+        self.transcript_status = "ok"
 
     async def onebot(self, ws):
         self.connection = ws
@@ -76,7 +80,9 @@ class Services:
                             part for part in data["message"] if part["type"] != "reply"
                         ]
                 else:
-                    data = next(frame for frame in self.frames if frame["message_id"] == message_id)
+                    data = self.message_override or next(
+                        frame for frame in self.frames if frame["message_id"] == message_id
+                    )
                 await ws.send(
                     json.dumps(
                         {
@@ -84,6 +90,18 @@ class Services:
                             "retcode": 0,
                             "echo": request["echo"],
                             "data": data,
+                        }
+                    )
+                )
+            elif request["action"] == "fetch_ptt_text":
+                self.transcriptions.append(request["params"])
+                await ws.send(
+                    json.dumps(
+                        {
+                            "status": self.transcript_status,
+                            "retcode": 0,
+                            "echo": request["echo"],
+                            "data": {"text": self.transcript},
                         }
                     )
                 )
@@ -1238,6 +1256,123 @@ async def test_media_only_messages_expose_safe_types(database_url, services, seg
         ]
         assert "PRIVATE" not in context
         assert "UNTRUSTED_KIND" not in context
+        assert services.sent == []
+    finally:
+        stop.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+async def test_native_asr_reaches_reply_as_scoped_evidence(database_url, services):
+    incoming = message(content="")
+    incoming["message"] = [{"type": "record", "data": {"file": "PRIVATE_AUDIO"}}]
+    services.frames = [incoming]
+    config = settings(
+        database_url, services, XIAOLV_NATIVE_ASR_CONVERSATIONS='["qq:10000:group:20000"]'
+    )
+    stop = asyncio.Event()
+    task = asyncio.create_task(run_live(config, stop))
+    try:
+        await asyncio.wait_for(services.delivered.wait(), 5)
+        stop.set()
+        summary = await asyncio.wait_for(task, 6)
+        assert summary.outcomes == {"confirmed": 1}
+        assert services.transcriptions == [{"message_id": 1}]
+        decision = json.loads(services.model_requests[0]["messages"][1]["content"])
+        reply = json.loads(services.model_requests[1]["messages"][1]["content"])
+        assert decision["messages"][-1]["parts"][0]["status"] == "unprocessed"
+        row = reply["messages"][-1]
+        assert row["text"] == ""
+        assert row["parts"] == [
+            {
+                "kind": "audio",
+                "media_ref": "media_1_1",
+                "status": "interpreted",
+                "interpretation": {
+                    "kind": "transcript",
+                    "text": "周六下午三点见。",
+                    "processor": "snowluma-native-asr:v1",
+                },
+            }
+        ]
+        assert "PRIVATE_AUDIO" not in json.dumps(reply)
+        assert "interpretation" in services.model_requests[1]["messages"][0]["content"]
+    finally:
+        stop.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"group_id": 30000},
+        {"user_id": 99999},
+        {"message_id": 2},
+        {"message": [{"type": "record", "data": {"file": "OTHER_AUDIO"}}]},
+        {
+            "message": [
+                {"type": "record", "data": {"file": "PRIVATE_AUDIO"}},
+                {"type": "record", "data": {"file": "OTHER_AUDIO"}},
+            ]
+        },
+    ],
+)
+async def test_native_asr_rejects_mismatched_source(database_url, services, change):
+    from xiaolv.live import LiveSummary
+
+    incoming = message(content="")
+    incoming["message"] = [{"type": "record", "data": {"file": "PRIVATE_AUDIO"}}]
+    services.frames = [incoming]
+    services.message_override = {**incoming, **change}
+    config = settings(
+        database_url, services, XIAOLV_NATIVE_ASR_CONVERSATIONS='["qq:10000:group:20000"]'
+    )
+    stats = LiveSummary()
+    stop = asyncio.Event()
+    task = asyncio.create_task(run_live(config, stop, statistics=stats))
+    try:
+        await until(lambda: bool(stats.outcomes), task)
+        assert stats.outcomes == {"media_error": 1}
+        assert services.transcriptions == []
+        assert len(services.model_requests) == 1
+        assert services.sent == []
+    finally:
+        stop.set()
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize(
+    ("transcript", "status"),
+    [
+        ("", "ok"),
+        ("   ", "ok"),
+        ("字" * 3001, "ok"),
+        (123, "ok"),
+        ("不得采用这个失败结果", "failed"),
+    ],
+    ids=["empty", "blank", "too-long", "wrong-type", "failed"],
+)
+async def test_native_asr_failure_never_generates_reply(database_url, services, transcript, status):
+    from xiaolv.live import LiveSummary
+
+    incoming = message(content="")
+    incoming["message"] = [{"type": "record", "data": {"file": "PRIVATE_AUDIO"}}]
+    services.frames = [incoming]
+    services.transcript = transcript
+    services.transcript_status = status
+    config = settings(
+        database_url, services, XIAOLV_NATIVE_ASR_CONVERSATIONS='["qq:10000:group:20000"]'
+    )
+    stats = LiveSummary()
+    stop = asyncio.Event()
+    task = asyncio.create_task(run_live(config, stop, statistics=stats))
+    try:
+        await until(lambda: bool(stats.outcomes), task)
+        assert stats.outcomes == {"media_error": 1}
+        assert services.transcriptions == [{"message_id": 1}]
+        assert len(services.model_requests) == 1
         assert services.sent == []
     finally:
         stop.set()

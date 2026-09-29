@@ -71,6 +71,7 @@ class Settings(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
 
     speech: SpeechSettings | None = None
+    native_asr_conversations: tuple[str, ...] = ()
     speech_recovery_interval_seconds: float = Field(default=30, gt=0, le=3600, allow_inf_nan=False)
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     log_file: Path | None = None
@@ -105,6 +106,13 @@ class Settings(BaseModel):
     def validate_limits(self) -> Self:
         if self.queue_max_age_seconds > self.chat_ttl_seconds:
             raise ValueError("queue_max_age_seconds exceeds chat_ttl_seconds")
+        if self.native_asr_conversations:
+            asr_routes = {f"qq:{self.qq_self_id}:group:{id}" for id in self.enabled_group_ids}
+            asr_routes.update(
+                f"qq:{self.qq_self_id}:private:{id}" for id in self.enabled_private_ids
+            )
+            if not set(self.native_asr_conversations).issubset(asr_routes):
+                raise ValueError("invalid native ASR scope")
         if self.speech is not None:
             routes = {f"qq:{self.qq_self_id}:group:{id}" for id in self.enabled_group_ids}
             routes.update(f"qq:{self.qq_self_id}:private:{id}" for id in self.enabled_private_ids)
@@ -183,6 +191,7 @@ def load_settings(environ: Mapping[str, str]) -> Settings:
         "delivery_policy",
         "context_policy",
         "speech",
+        "native_asr_conversations",
     ):
         key = "XIAOLV_" + name.upper()
         if key in environ:

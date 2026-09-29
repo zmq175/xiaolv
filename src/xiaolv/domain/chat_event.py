@@ -2,6 +2,14 @@
 
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Literal
+
+
+@dataclass(frozen=True)
+class MediaInterpretation:
+    kind: Literal["transcript"]
+    text: str
+    processor: str
 
 
 @dataclass(frozen=True)
@@ -10,6 +18,7 @@ class MessagePart:
     text: str | None = None
     reference: str | None = None
     url: str | None = None
+    interpretation: MediaInterpretation | None = None
 
 
 @dataclass(frozen=True)

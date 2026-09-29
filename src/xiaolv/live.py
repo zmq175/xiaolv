@@ -14,6 +14,7 @@ from websockets.exceptions import WebSocketException
 
 from xiaolv.application.chat_worker import ChatWorker
 from xiaolv.application.delivery import DeliveryService
+from xiaolv.application.inbound_speech import InboundSpeech
 from xiaolv.application.incoming import IncomingMessages
 from xiaolv.application.speech_execution import SpeechExecution
 from xiaolv.application.voice_dispatch import VoiceDispatch
@@ -27,6 +28,7 @@ from xiaolv.models.tokenizer import load_tokenizer
 from xiaolv.orchestration.text_runtime import TextRuntime
 from xiaolv.platforms.onebot import OneBotPreparation, OneBotSender, QQTarget
 from xiaolv.platforms.onebot_ingress import IngressError, OneBotIngress
+from xiaolv.platforms.onebot_speech import OneBotSpeechTranscriber
 from xiaolv.platforms.onebot_ws import OneBotWebSocket
 from xiaolv.settings import ConfigError, Settings, SpeechSettings
 from xiaolv.storage.audio_artifacts import LocalAudioArtifacts
@@ -228,6 +230,11 @@ async def run_live(
                     max_chars=settings.max_reply_chars,
                     profile_loader=PublishedProfiles(engine, settings.bot_profile).load,
                     voice_delivery=voice_delivery,
+                    inbound_speech=InboundSpeech(
+                        OneBotSpeechTranscriber(rpc, routes), settings.native_asr_conversations
+                    )
+                    if settings.native_asr_conversations
+                    else None,
                 ),
             )
             await delivery.recover()

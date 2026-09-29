@@ -86,6 +86,13 @@ class ContextAssembler:
                                 "status": "unsupported" if kind == "unsupported" else "unprocessed",
                             }
                         )
+                        if part.interpretation is not None:
+                            parts[-1]["status"] = "interpreted"
+                            parts[-1]["interpretation"] = {
+                                "kind": part.interpretation.kind,
+                                "text": part.interpretation.text,
+                                "processor": part.interpretation.processor,
+                            }
                     row["parts"] = parts
                 rows.append(row)
             return json.dumps(
