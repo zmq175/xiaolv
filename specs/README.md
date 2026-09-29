@@ -25,5 +25,6 @@
 | [016 标准日志框架](016-standard-logging/spec.md) | Verified | 标准logging、轮转、OTel回合内关联与CLI |
 | [017 模型SDK](017-model-sdk/spec.md) | Verified | 官方SDK原始流、费用原值校验、取消与端到端回归 |
 | [018 身份与提示词](018-configurable-persona/spec.md) | Verified | 配置改名、模板分离、长度一致、在线接线 |
+| [019 原生引用回复](019-native-quotes/spec.md) | Verified | 会话内可信引用映射、reply 段、@组合与PG幂等；模型在线接线待完成 |
 
 Verified仅表示该规格明示范围通过验证，不代表完整首版或真实QQ上线验收。每个规格包含spec.md、plan.md、evidence.md。开发流程见CONTRIBUTING.md。

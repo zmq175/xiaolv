@@ -15,6 +15,7 @@ class DeliveryRequest:
     generation_epoch: int
     text: str
     mentions: tuple[str, ...] = ()
+    reply_to: str | None = None
 
 
 @dataclass(frozen=True)

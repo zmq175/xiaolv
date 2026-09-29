@@ -24,10 +24,12 @@ class OneBotSender:
         routes: Mapping[str, QQTarget],
         *,
         member_accounts: Mapping[str, Mapping[str, int]] | None = None,
+        reply_messages: Mapping[str, Mapping[str, int]] | None = None,
     ) -> None:
         self._rpc = rpc
         self._routes = dict(routes)
         self._members = {key: dict(value) for key, value in (member_accounts or {}).items()}
+        self._replies = {key: dict(value) for key, value in (reply_messages or {}).items()}
 
     async def send(self, request: DeliveryRequest) -> Literal["confirmed", "unknown"]:
         target = self._routes.get(request.conversation_id)
@@ -39,6 +41,11 @@ class OneBotSender:
         ):
             raise NotSent("conversation route is unavailable")
         segments = []
+        if request.reply_to is not None:
+            message_id = self._replies.get(request.conversation_id, {}).get(request.reply_to)
+            if type(message_id) is not int or message_id == 0 or not -(2**31) <= message_id < 2**31:
+                raise NotSent("reply target is unavailable")
+            segments.append({"type": "reply", "data": {"id": str(message_id)}})
         members = self._members.get(request.conversation_id, {})
         for member in dict.fromkeys(request.mentions):
             qq = members.get(member)

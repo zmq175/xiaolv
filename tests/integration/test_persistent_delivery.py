@@ -317,3 +317,28 @@ async def test_mentions_migration_preserves_preexisting_confirmed_text(database_
         assert platform.sent == []
     finally:
         await engine.dispose()
+
+
+async def test_quote_survives_restart_and_cannot_be_replaced(database_url):
+    from dataclasses import replace
+
+    import pytest
+
+    platform = RecordingPlatform()
+    engine = create_async_engine(database_url, hide_parameters=True)
+    try:
+        service = DeliveryService(platform, ledger=PostgresDeliveryLedger(engine))
+        request = replace(outgoing(await service.start_turn("chat-1")), reply_to="message-first")
+        assert await service.deliver(request) == "confirmed"
+    finally:
+        await engine.dispose()
+    restarted_engine = create_async_engine(database_url, hide_parameters=True)
+    try:
+        restarted = DeliveryService(platform, ledger=PostgresDeliveryLedger(restarted_engine))
+        assert await restarted.deliver(request) == "confirmed"
+        for replacement in ("message-second", None):
+            with pytest.raises(ValueError, match="conflict"):
+                await restarted.deliver(replace(request, reply_to=replacement))
+        assert platform.sent == [request]
+    finally:
+        await restarted_engine.dispose()

@@ -157,3 +157,124 @@ async def test_repeated_member_reference_only_notifies_once():
         {"type": "at", "data": {"qq": "10002"}},
         {"type": "text", "data": {"text": request().text}},
     ]
+
+
+async def test_quote_uses_native_reply_without_adding_a_mention():
+    from dataclasses import replace
+
+    rpc = RecordingRPC()
+    adapter = OneBotSender(
+        rpc,
+        {"internal-chat": QQTarget("group", 10001)},
+        reply_messages={"internal-chat": {"message-first": -123}},
+    )
+    sender = DeliveryService(adapter, lambda: NOW, lambda _: 1)
+    outgoing = replace(request(), reply_to="message-first")
+    assert await sender.deliver(outgoing) == "confirmed"
+    assert rpc.requests == [
+        (
+            "send_group_msg",
+            {
+                "group_id": 10001,
+                "message": [
+                    {"type": "reply", "data": {"id": "-123"}},
+                    {"type": "text", "data": {"text": outgoing.text}},
+                ],
+            },
+        )
+    ]
+
+
+@pytest.mark.parametrize("message_id", [0, True, "123", -(2**31) - 1, 2**31])
+async def test_invalid_quote_id_is_rejected_without_sending(message_id):
+    from dataclasses import replace
+
+    rpc = RecordingRPC()
+    adapter = OneBotSender(
+        rpc,
+        {"internal-chat": QQTarget("group", 10001)},
+        reply_messages={"internal-chat": {"message-first": message_id}},
+    )
+    sender = DeliveryService(adapter, lambda: NOW, lambda _: 1)
+    assert await sender.deliver(replace(request(), reply_to="message-first")) == "not_sent"
+    assert rpc.requests == []
+
+
+@pytest.mark.parametrize("references", [{}, {"other-chat": {"message-first": 123}}])
+async def test_quote_cannot_resolve_from_another_conversation(references):
+    from dataclasses import replace
+
+    rpc = RecordingRPC()
+    adapter = OneBotSender(
+        rpc,
+        {"internal-chat": QQTarget("group", 10001)},
+        reply_messages=references,
+    )
+    sender = DeliveryService(adapter, lambda: NOW, lambda _: 1)
+    assert await sender.deliver(replace(request(), reply_to="message-first")) == "not_sent"
+    assert rpc.requests == []
+
+
+async def test_quote_and_explicit_mention_can_be_combined():
+    from dataclasses import replace
+
+    rpc = RecordingRPC()
+    adapter = OneBotSender(
+        rpc,
+        {"internal-chat": QQTarget("group", 10001)},
+        reply_messages={"internal-chat": {"message-first": 123}},
+        member_accounts={"internal-chat": {"account-alice": 10002}},
+    )
+    sender = DeliveryService(adapter, lambda: NOW, lambda _: 1)
+    outgoing = replace(request(), reply_to="message-first", mentions=("account-alice",))
+    assert await sender.deliver(outgoing) == "confirmed"
+    assert rpc.requests[0][1]["message"] == [
+        {"type": "reply", "data": {"id": "123"}},
+        {"type": "at", "data": {"qq": "10002"}},
+        {"type": "text", "data": {"text": outgoing.text}},
+    ]
+
+
+async def test_private_quote_keeps_private_route():
+    from dataclasses import replace
+
+    rpc = RecordingRPC()
+    adapter = OneBotSender(
+        rpc,
+        {"internal-chat": QQTarget("private", 10002)},
+        reply_messages={"internal-chat": {"message-first": -(2**31)}},
+    )
+    sender = DeliveryService(adapter, lambda: NOW, lambda _: 1)
+    assert await sender.deliver(replace(request(), reply_to="message-first")) == "confirmed"
+    assert rpc.requests == [
+        (
+            "send_private_msg",
+            {
+                "user_id": 10002,
+                "message": [
+                    {"type": "reply", "data": {"id": "-2147483648"}},
+                    {"type": "text", "data": {"text": request().text}},
+                ],
+            },
+        )
+    ]
+
+
+@pytest.mark.parametrize("stale,expected", [("expired", "expired"), ("epoch", "superseded")])
+async def test_quote_does_not_bypass_delivery_validity(stale, expected):
+    from dataclasses import replace
+
+    rpc = RecordingRPC()
+    adapter = OneBotSender(
+        rpc,
+        {"internal-chat": QQTarget("group", 10001)},
+        reply_messages={"internal-chat": {"message-first": 123}},
+    )
+    sender = DeliveryService(adapter, lambda: NOW, lambda _: 1)
+    outgoing = replace(request(), reply_to="message-first")
+    if stale == "expired":
+        outgoing = replace(outgoing, expires_at=NOW)
+    else:
+        outgoing = replace(outgoing, generation_epoch=0)
+    assert await sender.deliver(outgoing) == expected
+    assert rpc.requests == []
