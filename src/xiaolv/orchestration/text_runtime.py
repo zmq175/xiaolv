@@ -2,13 +2,14 @@
 
 import asyncio
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Literal, Protocol, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
 from xiaolv.application.delivery import DeliveryRequest, DeliveryService
+from xiaolv.domain.chat_event import ConversationContext
 
 
 @dataclass(frozen=True)
@@ -18,6 +19,7 @@ class ConversationCandidate:
     text: str
     expires_at: datetime
     generation_epoch: int
+    context: ConversationContext = field(default_factory=lambda: ConversationContext(0, ()))
 
 
 class ConversationModel(Protocol):

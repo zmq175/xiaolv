@@ -12,4 +12,8 @@
 | [008 WebSocket连接](008-onebot-websocket/spec.md) | Verified | 本地协议认证、混流、并发和断连 |
 | [009 原生成员@](009-native-mentions/spec.md) | Verified | 会话内成员映射、at段及PG持久化 |
 
+| [010 入站归一化](010-onebot-ingress/spec.md) | Verified | 群/私聊/临时会话、结构化段及时间 |
+| [011 持久入站](011-persistent-inbox/spec.md) | Verified | PG去重、版本快照、隔离与故障回滚 |
+| [012 持久候选调度](012-durable-candidates/spec.md) | Implementing | 11个worker用例；强制终止恢复待验收 |
+
 Verified仅表示该规格明示范围通过验证，不代表完整首版或真实QQ上线验收。每个规格包含spec.md、plan.md、evidence.md。开发流程见CONTRIBUTING.md。
