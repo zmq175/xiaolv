@@ -45,3 +45,5 @@
 每图媒体token须显式配置保守预留，不以base64长度计算；文字+schema+封装估计与媒体预留共同受视觉上下文上限约束，另留512输出和512安全余量。费用预留沿用文字字节保守上界并加媒体token预留，最终用供应商usage结算，未知usage保持未知。实际媒体计数按供应商和模型校准，配置值不是精确计费保证。首次SDK回放不代表在线配置/真实计费已经接通。
 
 官方协议依据（2026-09-30核对）：https://developers.openai.com/api/docs/guides/images-vision ，Chat Completions的image_url支持data URL；detail和图片token规则依模型而异。本地锁定SDK支持low/high/auto，本阶段显式low。
+
+视觉金额集成验收补充：经聊天回放入口与真实PostgreSQL账本，使用相同文字/图片、只改变显式媒体预留的用例验证金额门槛；已知usage按实际输入/输出结算，未知usage保留预留。重建数据库连接后通过公开账本快照和再次聊天调用观察费用状态，不直接查询内部表。测试供应商为合成HTTP响应，实际供应商图片计数和价格仍需上线前校准。
