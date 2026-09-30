@@ -7,19 +7,21 @@ from typing import Protocol
 
 from xiaolv.application.inbound_speech import MediaUnavailable
 from xiaolv.domain.chat_event import ChatEvent, MediaInterpretation
-from xiaolv.platforms.media_http import ImageBytes, MediaDownloader
+from xiaolv.domain.image import PreparedImage
+from xiaolv.media.image_normalizer import ImageNormalizer
+from xiaolv.platforms.media_http import MediaDownloader
 from xiaolv.platforms.onebot import OneBotRPC, QQTarget, _message_data
 
 
 class VisionDescriber(Protocol):
-    """Implementations must validate/decode bounded bytes and reserve media cost before calling a model.
+    """Describe normalized pixels, preserving sampling limits and reserving media cost.
 
-    No production vision provider is wired yet; image Content-Type is not format validation.
+    Decoding occurs before this boundary. No production vision provider is wired yet.
     """
 
     processor: str
 
-    async def describe(self, image: ImageBytes, expires_at: datetime) -> str: ...
+    async def describe(self, image: PreparedImage, expires_at: datetime) -> str: ...
 
 
 class OneBotImageInterpreter:
@@ -33,6 +35,7 @@ class OneBotImageInterpreter:
         self._rpc, self._routes = rpc, dict(routes)
         self._downloader, self._vision = downloader, vision
         self.processor = vision.processor
+        self._normalizer = ImageNormalizer()
 
     async def interpret(
         self,
@@ -76,5 +79,7 @@ class OneBotImageInterpreter:
             raise MediaUnavailable()
         image = await self._downloader.fetch(data["url"], expires_at)
         await before_vision()
-        description = await self._vision.describe(image, expires_at)
+        prepared = await self._normalizer.prepare(image, expires_at)
+        await before_vision()
+        description = await self._vision.describe(prepared, expires_at)
         return MediaInterpretation("image_description", description, self.processor)

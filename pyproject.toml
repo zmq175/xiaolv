@@ -15,6 +15,7 @@ dependencies = [
     "openai>=3,<4",
     "opentelemetry-api>=1,<2",
     "opentelemetry-sdk>=1,<2",
+    "pillow>=12,<13",
     "psycopg[binary]>=3,<4",
     "pwdlib[argon2]>=0.3,<1",
     "pydantic>=2,<3",

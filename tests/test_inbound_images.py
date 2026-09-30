@@ -13,7 +13,7 @@ from xiaolv.platforms.onebot import QQTarget
 
 SCOPE = "qq:10000:group:20000"
 PNG = bytes.fromhex(
-    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000b49444154789c636000020000050001a5f645400000000049454e44ae426082"
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360606060000000050001a5f645400000000049454e44ae426082"
 )
 
 
@@ -146,7 +146,8 @@ async def test_image_download_pins_public_ip_and_keeps_tls_hostname():
     assert requests[0].headers["host"] == "media.example"
     assert requests[0].extensions["sni_hostname"] == "media.example"
     assert "authorization" not in requests[0].headers
-    assert vision.images[0].data == PNG
+    assert vision.images[0].data.startswith(b"\xff\xd8")
+    assert (vision.images[0].width, vision.images[0].height) == (1, 1)
     context = json.loads(generator.requests[1]["context"])
     assert context["messages"][0]["parts"][0]["interpretation"] == {
         "kind": "image_description",
@@ -443,3 +444,123 @@ async def test_original_deadline_closes_stalled_image_stream():
     assert closed.is_set()
     assert vision.images == [] and platform.sent == []
     assert len(generator.requests) == 1
+
+
+async def test_large_image_is_decoded_and_resized_before_vision():
+    from io import BytesIO
+
+    from PIL import Image
+    from PIL.PngImagePlugin import PngInfo
+
+    from xiaolv.platforms.media_http import MediaDownloader
+
+    data = BytesIO()
+    metadata = PngInfo()
+    metadata.add_text("Comment", "PRIVATE_METADATA")
+    Image.new("RGBA", (1600, 800), (255, 0, 0, 0)).save(data, format="PNG", pnginfo=metadata)
+
+    async def resolve(host, port):
+        return ("93.184.215.14",)
+
+    async def respond(request):
+        return httpx.Response(200, headers={"content-type": "image/png"}, content=data.getvalue())
+
+    vision = Vision()
+    outcome, _, platform = await replay(
+        RPC(), MediaDownloader(resolver=resolve, transport=httpx.MockTransport(respond)), vision
+    )
+    assert outcome == "confirmed"
+    normalized = vision.images[0]
+    with Image.open(BytesIO(normalized.data)) as im:
+        assert im.format == "JPEG"
+        assert im.size == (512, 256)
+        assert im.convert("RGB").getpixel((0, 0)) == (255, 255, 255)
+        assert "Comment" not in im.info
+        assert not im.getexif()
+    assert b"PRIVATE_METADATA" not in normalized.data
+    assert normalized.content_type == "image/jpeg"
+    assert (normalized.width, normalized.height, normalized.original_frames) == (512, 256, 1)
+    assert len(platform.sent) == 1
+
+
+@pytest.mark.parametrize("case", ["invalid", "truncated", "pixels", "edge", "mime", "format"])
+async def test_invalid_image_never_reaches_vision(case):
+    from io import BytesIO
+
+    from PIL import Image
+
+    from xiaolv.platforms.media_http import MediaDownloader
+
+    mime = "image/png"
+    if case == "invalid":
+        raw = b"PRIVATE_INVALID_IMAGE"
+    elif case == "truncated":
+        raw = PNG[:40]
+    else:
+        size = (6000, 3000) if case == "pixels" else (17000, 1) if case == "edge" else (1, 1)
+        data = BytesIO()
+        Image.new("RGB", size, "white").save(data, format="BMP" if case == "format" else "PNG")
+        raw = data.getvalue()
+        if case == "mime":
+            mime = "image/jpeg"
+
+    async def resolve(host, port):
+        return ("93.184.215.14",)
+
+    async def respond(request):
+        return httpx.Response(200, headers={"content-type": mime}, content=raw)
+
+    vision = Vision()
+    outcome, generator, platform = await replay(
+        RPC(), MediaDownloader(resolver=resolve, transport=httpx.MockTransport(respond)), vision
+    )
+    assert outcome == "media_error"
+    assert vision.images == [] and platform.sent == []
+    assert len(generator.requests) == 1
+
+
+@pytest.mark.parametrize("kind", ["rotated_jpeg", "animated_gif"])
+async def test_vision_receives_oriented_image_and_explicit_frame_sampling(kind):
+    from io import BytesIO
+
+    from PIL import Image
+
+    from xiaolv.platforms.media_http import MediaDownloader
+
+    data = BytesIO()
+    if kind == "rotated_jpeg":
+        original = Image.new("RGB", (80, 40), "red")
+        exif = Image.Exif()
+        exif[274] = 6  # EXIF orientation: 90 degrees clockwise.
+        original.save(data, format="JPEG", exif=exif)
+        mime = "image/jpeg"
+    else:
+        first = Image.new("RGB", (80, 40), "red")
+        second = Image.new("RGB", (80, 40), "blue")
+        first.save(data, format="GIF", save_all=True, append_images=[second], duration=100, loop=0)
+        mime = "image/gif"
+
+    async def resolve(host, port):
+        return ("93.184.215.14",)
+
+    async def respond(request):
+        return httpx.Response(200, headers={"content-type": mime}, content=data.getvalue())
+
+    vision = Vision()
+    outcome, _, _ = await replay(
+        RPC(), MediaDownloader(resolver=resolve, transport=httpx.MockTransport(respond)), vision
+    )
+    assert outcome == "confirmed"
+    normalized = vision.images[0]
+    assert normalized.sampled_frames == (0,)
+    with Image.open(BytesIO(normalized.data)) as image:
+        assert image.format == "JPEG"
+        assert not image.getexif()
+        if kind == "rotated_jpeg":
+            assert image.size == (40, 80)
+            assert (normalized.width, normalized.height) == (40, 80)
+            assert normalized.original_frames == 1
+        else:
+            assert normalized.original_frames == 2
+            red, green, blue = image.getpixel((20, 20))
+            assert red > 240 and green < 10 and blue < 10
