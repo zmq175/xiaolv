@@ -20,7 +20,7 @@ class ImageInterpreter(Protocol):
     async def interpret(
         self,
         event: ChatEvent,
-        part_index: int,
+        part_index: int | tuple[int, ...],
         expires_at: datetime,
         before_vision: Callable[[], Awaitable[None]],
     ) -> MediaInterpretation: ...
@@ -59,16 +59,19 @@ class InboundImages:
             images = [i for i, part in enumerate(event.parts) if part.kind in {"image", "sticker"}]
             if not images:
                 continue
-            if len(images) != 1 or event.conversation_id != candidate.conversation_id:
+            if len(images) > 4 or event.conversation_id != candidate.conversation_id:
                 raise MediaUnavailable()
-            part_index = images[0]
-            cached = event.parts[part_index].interpretation
+            part_index = images[0] if len(images) == 1 else tuple(images)
+            sources = tuple(images) if len(images) > 1 else ()
+            cached = event.parts[images[0]].interpretation
             if (
                 cached is not None
                 and cached.processor == self._interpreter.processor
                 and cached.kind == "image_description"
                 and cached.text.strip()
                 and len(cached.text) <= 3000
+                and cached.source_part_indices == sources
+                and all(event.parts[i].interpretation == cached for i in images)
             ):
                 continue
             try:
@@ -81,13 +84,15 @@ class InboundImages:
                 raise MediaUnavailable() from None
             if not interpretation.text.strip() or len(interpretation.text) > 3000:
                 raise MediaUnavailable()
+            interpretation = replace(interpretation, source_part_indices=sources)
             if self._store is not None:
                 messages[index] = await self._store.save(
                     candidate, event, part_index, interpretation
                 )
             else:
                 parts = list(event.parts)
-                parts[part_index] = replace(parts[part_index], interpretation=interpretation)
+                for image_index in images:
+                    parts[image_index] = replace(parts[image_index], interpretation=interpretation)
                 messages[index] = replace(
                     event, parts=tuple(parts), content_version=event.content_version + 1
                 )

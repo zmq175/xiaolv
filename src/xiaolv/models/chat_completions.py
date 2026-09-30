@@ -129,7 +129,7 @@ class ChatCompletionsGateway:
         context: str,
         schema: dict[str, Any],
         expires_at: datetime,
-        image: PreparedImage | None = None,
+        image: PreparedImage | tuple[PreparedImage, ...] | None = None,
         image_tokens: int = 0,
     ) -> str:
         remaining = (expires_at - datetime.now(UTC)).total_seconds()
@@ -197,21 +197,23 @@ class ChatCompletionsGateway:
         instructions: str,
         context: str,
         schema: dict[str, Any],
-        image: PreparedImage | None = None,
+        image: PreparedImage | tuple[PreparedImage, ...] | None = None,
     ) -> tuple[str, TokenUsage | None]:
         user_content: str | list[ChatCompletionContentPartParam] = context
         if image is not None:
-            user_content = [
-                {"type": "text", "text": context},
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": "data:image/jpeg;base64,"
-                        + base64.b64encode(image.data).decode("ascii"),
-                        "detail": "low",
-                    },
-                },
-            ]
+            images = (image,) if isinstance(image, PreparedImage) else image
+            user_content = [{"type": "text", "text": context}]
+            for item in images:
+                user_content.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "data:image/jpeg;base64,"
+                            + base64.b64encode(item.data).decode("ascii"),
+                            "detail": "low",
+                        },
+                    }
+                )
         output: list[str] = []
         finished = False
         usage = None

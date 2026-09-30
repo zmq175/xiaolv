@@ -11,9 +11,12 @@ from test_vision_settings import vision_configuration
 from xiaolv.live import LiveSummary, run_live
 
 
-@pytest.mark.parametrize("enabled,next_group", [(True, 20000), (True, 30000), (False, 20000)])
+@pytest.mark.parametrize(
+    "enabled,next_group,image_count",
+    [(True, 20000, 1), (True, 20000, 2), (True, 30000, 1), (False, 20000, 1)],
+)
 async def test_online_image_description_survives_restart(
-    database_url, services, enabled, next_group
+    database_url, services, enabled, next_group, image_count
 ):
     config = vision_configuration()
     config["base_url"] = services.model_url
@@ -26,6 +29,8 @@ async def test_online_image_description_survives_restart(
     )
     frame = message(content="")
     frame["message"] = [{"type": "image", "data": {"file": "PRIVATE_IMAGE"}}]
+    if image_count == 2:
+        frame["message"].append({"type": "image", "data": {"file": "PRIVATE_SECOND"}})
     services.frames = [frame]
     downloads = []
 
@@ -48,7 +53,8 @@ async def test_online_image_description_survives_restart(
             )
         )
         try:
-            await until(lambda: stats.outcomes.get("confirmed") == 1, task)
+            await until(lambda: bool(stats.outcomes), task)
+            assert stats.outcomes == {"confirmed": 1}
         finally:
             stop.set()
             try:
@@ -64,15 +70,22 @@ async def test_online_image_description_survives_restart(
         assert "unprocessed" in reply and "持久化的合成图片描述" not in reply
         return
     assert len(services.model_requests) == 3
-    assert len(downloads) == 1
+    assert len(downloads) == image_count
     first_reply = json.loads(services.model_requests[-1]["messages"][1]["content"])
     assert first_reply["messages"][0]["content_version"] == 2
+    assert all(part["status"] == "interpreted" for part in first_reply["messages"][0]["parts"])
     services.frames = [message(message_id=2, group_id=next_group, content="刚才图片说的什么？")]
     await run_once()
-    assert len(services.model_requests) == 5 and len(downloads) == 1
+    assert len(services.model_requests) == 5 and len(downloads) == image_count
     later = json.loads(services.model_requests[-1]["messages"][1]["content"])
     if next_group == 20000:
         assert "持久化的合成图片描述" in json.dumps(later, ensure_ascii=False)
+        if image_count == 2:
+            saved = next(row for row in later["messages"] if "parts" in row)
+            assert saved["content_version"] == 2
+            assert len(saved["parts"]) == 2
+            assert saved["parts"][0]["interpretation"] == saved["parts"][1]["interpretation"]
+            assert len(saved["parts"][0]["interpretation"]["source_media_refs"]) == 2
     else:
         assert "持久化的合成图片描述" not in json.dumps(later, ensure_ascii=False)
         assert len(later["messages"]) == 1

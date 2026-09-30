@@ -30,7 +30,7 @@ class InterpretationStore(Protocol):
         self,
         candidate: "ConversationCandidate",
         event: ChatEvent,
-        part_index: int,
+        part_index: int | tuple[int, ...],
         interpretation: MediaInterpretation,
     ) -> ChatEvent: ...
 

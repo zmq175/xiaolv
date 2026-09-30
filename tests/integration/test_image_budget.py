@@ -30,7 +30,9 @@ def policy():
     )
 
 
-async def run_image(engine, *, image_tokens, known_usage=True, provider_mode="success", ttl=5):
+async def run_image(
+    engine, *, image_tokens, known_usage=True, provider_mode="success", ttl=5, image_count=1
+):
     requests = []
 
     async def serve(request):
@@ -61,6 +63,15 @@ async def run_image(engine, *, image_tokens, known_usage=True, provider_mode="su
     async def download(request):
         return httpx.Response(200, headers={"content-type": "image/png"}, content=PNG)
 
+    from xiaolv.domain.chat_event import MessagePart
+
+    rpc = RPC()
+    parts = None
+    if image_count == 2:
+        rpc.source_changes["message"] = [
+            {"type": "image", "data": {"file": ref}} for ref in ("one", "two")
+        ]
+        parts = tuple(MessagePart("image", reference=ref) for ref in ("one", "two"))
     async with ChatCompletionsGateway(
         base_url="https://vision.example/v1",
         api_key="synthetic",
@@ -69,12 +80,13 @@ async def run_image(engine, *, image_tokens, known_usage=True, provider_mode="su
         budget=PostgresModelBudget(engine, policy()),
     ) as gateway:
         outcome, generator, platform = await replay(
-            RPC(),
+            rpc,
             MediaDownloader(resolver=resolve, transport=httpx.MockTransport(download)),
             ImageDescriber(
                 gateway, processor="synthetic:v1", image_tokens=image_tokens, window_tokens=16384
             ),
             ttl=ttl,
+            parts=parts,
         )
     return outcome, generator, platform, requests
 
@@ -148,3 +160,18 @@ async def test_failed_vision_keeps_unknown_cost_and_never_retries(
         assert requests == [] and platform.sent == []
     finally:
         await rebuilt.dispose()
+
+
+@pytest.mark.parametrize("image_count", [1, 2])
+async def test_joint_image_cost_reserves_each_image(database_url, image_count):
+    engine = create_async_engine(database_url, hide_parameters=True)
+    try:
+        outcome, _, platform, requests = await run_image(
+            engine, image_tokens=1000, image_count=image_count
+        )
+        if image_count == 1:
+            assert outcome == "confirmed" and len(requests) == 1
+        else:
+            assert outcome == "budget_denied" and requests == [] and platform.sent == []
+    finally:
+        await engine.dispose()

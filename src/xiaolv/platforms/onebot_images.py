@@ -21,7 +21,9 @@ class VisionDescriber(Protocol):
 
     processor: str
 
-    async def describe(self, image: PreparedImage, expires_at: datetime) -> str: ...
+    async def describe(
+        self, image: PreparedImage | tuple[PreparedImage, ...], expires_at: datetime
+    ) -> str: ...
 
 
 class OneBotImageInterpreter:
@@ -40,7 +42,7 @@ class OneBotImageInterpreter:
     async def interpret(
         self,
         event: ChatEvent,
-        part_index: int,
+        part_index: int | tuple[int, ...],
         expires_at: datetime,
         before_vision: Callable[[], Awaitable[None]],
     ) -> MediaInterpretation:
@@ -54,32 +56,37 @@ class OneBotImageInterpreter:
         source = _message_data(response, message_id, target, outgoing=False)
         if source is None or f"qq:{source.get('user_id')}" != event.sender_account_id:
             raise MediaUnavailable()
-        reference = event.parts[part_index].reference
-        segments = source.get("message")
-        if not isinstance(segments, list) or not 0 <= part_index < len(segments):
-            raise MediaUnavailable()
-        segment = segments[part_index]
-        if (
-            not isinstance(segment, dict)
-            or segment.get("type") not in {"image", "mface"}
-            or not isinstance(segment.get("data"), dict)
-            or segment["data"].get("file") != reference
-            or not reference
-        ):
-            raise MediaUnavailable()
-        response = await self._rpc.call("get_image", {"file": reference})
-        data = response.get("data")
-        if (
-            response.get("status") != "ok"
-            or type(response.get("retcode")) is not int
-            or response["retcode"] != 0
-            or not isinstance(data, dict)
-            or not isinstance(data.get("url"), str)
-        ):
-            raise MediaUnavailable()
-        image = await self._downloader.fetch(data["url"], expires_at)
-        await before_vision()
-        prepared = await self._normalizer.prepare(image, expires_at)
-        await before_vision()
-        description = await self._vision.describe(prepared, expires_at)
+        indices = (part_index,) if isinstance(part_index, int) else part_index
+        prepared_images = []
+        for index in indices:
+            reference = event.parts[index].reference
+            segments = source.get("message")
+            if not isinstance(segments, list) or not 0 <= index < len(segments):
+                raise MediaUnavailable()
+            segment = segments[index]
+            if (
+                not isinstance(segment, dict)
+                or segment.get("type") not in {"image", "mface"}
+                or not isinstance(segment.get("data"), dict)
+                or segment["data"].get("file") != reference
+                or not reference
+            ):
+                raise MediaUnavailable()
+            response = await self._rpc.call("get_image", {"file": reference})
+            data = response.get("data")
+            if (
+                response.get("status") != "ok"
+                or type(response.get("retcode")) is not int
+                or response["retcode"] != 0
+                or not isinstance(data, dict)
+                or not isinstance(data.get("url"), str)
+            ):
+                raise MediaUnavailable()
+            image = await self._downloader.fetch(data["url"], expires_at)
+            await before_vision()
+            prepared = await self._normalizer.prepare(image, expires_at)
+            await before_vision()
+            prepared_images.append(prepared)
+        vision_input = prepared_images[0] if len(prepared_images) == 1 else tuple(prepared_images)
+        description = await self._vision.describe(vision_input, expires_at)
         return MediaInterpretation("image_description", description, self.processor)

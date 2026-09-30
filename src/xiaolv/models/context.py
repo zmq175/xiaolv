@@ -94,6 +94,11 @@ class ContextAssembler:
                                 "text": part.interpretation.text,
                                 "processor": part.interpretation.processor,
                             }
+                            if part.interpretation.source_part_indices:
+                                parts[-1]["interpretation"]["source_media_refs"] = [
+                                    f"media_{i + 1}_{source_index + 1}"
+                                    for source_index in part.interpretation.source_part_indices
+                                ]
                     row["parts"] = parts
                 rows.append(row)
             return json.dumps(

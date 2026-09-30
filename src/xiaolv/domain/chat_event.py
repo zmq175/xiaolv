@@ -10,6 +10,7 @@ class MediaInterpretation:
     kind: Literal["transcript", "image_description"]
     text: str
     processor: str
+    source_part_indices: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)

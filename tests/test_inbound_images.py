@@ -80,7 +80,15 @@ class Vision:
 
 
 async def replay(
-    rpc, downloader, vision, *, authorize=None, ttl=5, interpretation=None, source_copies=1
+    rpc,
+    downloader,
+    vision,
+    *,
+    authorize=None,
+    ttl=5,
+    interpretation=None,
+    source_copies=1,
+    parts=None,
 ):
     from xiaolv.application.inbound_images import InboundImages
     from xiaolv.platforms.onebot_images import OneBotImageInterpreter
@@ -95,7 +103,9 @@ async def replay(
         now,
         now,
         now,
-        parts=(MessagePart("image", reference="image-ref", interpretation=interpretation),),
+        parts=parts
+        if parts is not None
+        else (MessagePart("image", reference="image-ref", interpretation=interpretation),),
     )
     candidate = ConversationCandidate(
         SCOPE,
@@ -649,3 +659,31 @@ async def test_ambiguous_source_stops_before_image_acquisition():
     assert outcome == "media_error"
     assert rpc.calls == [] and vision.images == [] and platform.sent == []
     assert len(generator.requests) == 1
+
+
+async def test_joint_image_evidence_is_reused_as_a_complete_group():
+    from xiaolv.domain.chat_event import MediaInterpretation
+    from xiaolv.platforms.media_http import MediaDownloader
+
+    evidence = MediaInterpretation(
+        "image_description", "图1和图2的联合描述", "synthetic-vision:v1|image-normalizer:v1", (0, 2)
+    )
+    rpc, vision = RPC(), Vision()
+
+    async def resolve(host, port):
+        pytest.fail("complete cached group must not download")
+
+    outcome, generator, _ = await replay(
+        rpc,
+        MediaDownloader(resolver=resolve),
+        vision,
+        parts=(
+            MessagePart("image", reference="one", interpretation=evidence),
+            MessagePart("text", text="一起看"),
+            MessagePart("image", reference="two", interpretation=evidence),
+        ),
+    )
+    assert outcome == "confirmed" and rpc.calls == [] and vision.images == []
+    row = json.loads(generator.requests[-1]["context"])["messages"][0]
+    assert row["content_version"] == 1
+    assert row["parts"][2]["interpretation"]["source_media_refs"] == ["media_1_1", "media_1_3"]

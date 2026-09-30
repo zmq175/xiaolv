@@ -23,9 +23,17 @@ class PostgresInterpretations:
         self,
         candidate: ConversationCandidate,
         event: ChatEvent,
-        part_index: int,
+        part_index: int | tuple[int, ...],
         interpretation: MediaInterpretation,
     ) -> ChatEvent:
+        indices = (part_index,) if isinstance(part_index, int) else part_index
+        if (
+            not indices
+            or len(indices) > 4
+            or len(set(indices)) != len(indices)
+            or any(not 0 <= index < len(event.parts) for index in indices)
+        ):
+            raise MediaUnavailable()
         if (
             event.conversation_id != candidate.conversation_id
             or event.message_id != candidate.source_message_id
@@ -66,7 +74,8 @@ class PostgresInterpretations:
             if payload is None or _CODEC.validate_python(payload) != event:
                 raise MediaUnavailable()
             parts = list(event.parts)
-            parts[part_index] = replace(parts[part_index], interpretation=interpretation)
+            for index in indices:
+                parts[index] = replace(parts[index], interpretation=interpretation)
             updated = replace(event, parts=tuple(parts), content_version=event.content_version + 1)
             result = await connection.execute(
                 text("""
