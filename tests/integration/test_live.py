@@ -48,6 +48,8 @@ class Services:
         self.transcript_status = "ok"
         self.transcription_started = asyncio.Event()
         self.transcription_gate = None
+        self.vision_started = asyncio.Event()
+        self.vision_gate = None
 
     async def onebot(self, ws):
         self.connection = ws
@@ -163,6 +165,10 @@ class Services:
             if self.hold is not None:
                 await self.hold.wait()
             properties = request["response_format"]["json_schema"]["schema"]["properties"]
+            if "description" in properties:
+                self.vision_started.set()
+                if self.vision_gate is not None:
+                    await self.vision_gate.wait()
             value = (
                 {"action": self.action} if "action" in properties else {"text": "我觉得先试一下。"}
             )
