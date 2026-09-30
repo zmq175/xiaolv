@@ -79,7 +79,9 @@ class Vision:
         return "一张合成测试图片。"
 
 
-async def replay(rpc, downloader, vision, *, authorize=None, ttl=5):
+async def replay(
+    rpc, downloader, vision, *, authorize=None, ttl=5, interpretation=None, source_copies=1
+):
     from xiaolv.application.inbound_images import InboundImages
     from xiaolv.platforms.onebot_images import OneBotImageInterpreter
 
@@ -93,7 +95,7 @@ async def replay(rpc, downloader, vision, *, authorize=None, ttl=5):
         now,
         now,
         now,
-        parts=(MessagePart("image", reference="image-ref"),),
+        parts=(MessagePart("image", reference="image-ref", interpretation=interpretation),),
     )
     candidate = ConversationCandidate(
         SCOPE,
@@ -101,7 +103,7 @@ async def replay(rpc, downloader, vision, *, authorize=None, ttl=5):
         "",
         now + timedelta(seconds=ttl),
         1,
-        ConversationContext(1, (event,)),
+        ConversationContext(1, (event,) * source_copies),
         source_message_id="1",
     )
     platform = Platform()
@@ -152,7 +154,7 @@ async def test_image_download_pins_public_ip_and_keeps_tls_hostname():
     assert context["messages"][0]["parts"][0]["interpretation"] == {
         "kind": "image_description",
         "text": "一张合成测试图片。",
-        "processor": "synthetic-vision:v1",
+        "processor": "synthetic-vision:v1|image-normalizer:v1",
     }
     assert "PRIVATE" not in generator.requests[1]["context"]
     assert len(platform.sent) == 1
@@ -564,3 +566,86 @@ async def test_vision_receives_oriented_image_and_explicit_frame_sampling(kind):
             assert normalized.original_frames == 2
             red, green, blue = image.getpixel((20, 20))
             assert red > 240 and green < 10 and blue < 10
+
+
+async def test_current_image_description_is_reused_without_external_calls():
+    from xiaolv.domain.chat_event import MediaInterpretation
+    from xiaolv.platforms.media_http import MediaDownloader
+
+    async def resolve(host, port):
+        pytest.fail("cached evidence must not download the image")
+
+    cached = MediaInterpretation(
+        "image_description", "缓存图片描述", "synthetic-vision:v1|image-normalizer:v1"
+    )
+    rpc, vision = RPC(), Vision()
+    outcome, generator, platform = await replay(
+        rpc, MediaDownloader(resolver=resolve), vision, interpretation=cached
+    )
+    assert outcome == "confirmed"
+    assert rpc.calls == [] and vision.images == []
+    context = json.loads(generator.requests[-1]["context"])
+    assert context["messages"][0]["content_version"] == 1
+    assert context["messages"][0]["parts"][0]["interpretation"]["text"] == "缓存图片描述"
+    assert len(platform.sent) == 1
+
+
+@pytest.mark.parametrize("case", ["old_model", "old_normalizer", "wrong_kind", "empty", "long"])
+async def test_invalid_or_obsolete_image_description_is_replaced(case):
+    from xiaolv.domain.chat_event import MediaInterpretation
+    from xiaolv.platforms.media_http import MediaDownloader
+
+    processor = "synthetic-vision:v1|image-normalizer:v1"
+    if case == "old_model":
+        processor = "synthetic-vision:v0|image-normalizer:v1"
+    elif case == "old_normalizer":
+        processor = "synthetic-vision:v1|image-normalizer:v0"
+    cached = MediaInterpretation(
+        "transcript" if case == "wrong_kind" else "image_description",
+        " " if case == "empty" else "x" * 3001 if case == "long" else "旧描述",
+        processor,
+    )
+
+    async def resolve(host, port):
+        return ("93.184.215.14",)
+
+    async def respond(request):
+        return httpx.Response(200, headers={"content-type": "image/png"}, content=PNG)
+
+    rpc, vision = RPC(), Vision()
+    outcome, generator, _ = await replay(
+        rpc,
+        MediaDownloader(resolver=resolve, transport=httpx.MockTransport(respond)),
+        vision,
+        interpretation=cached,
+    )
+    assert outcome == "confirmed"
+    assert len(rpc.calls) == 2 and len(vision.images) == 1
+    row = json.loads(generator.requests[-1]["context"])["messages"][0]
+    assert row["content_version"] == 2
+    assert row["parts"][0]["interpretation"] == {
+        "kind": "image_description",
+        "text": "一张合成测试图片。",
+        "processor": "synthetic-vision:v1|image-normalizer:v1",
+    }
+
+
+async def test_ambiguous_source_stops_before_image_acquisition():
+    from xiaolv.platforms.media_http import MediaDownloader
+
+    async def resolve(host, port):
+        return ("93.184.215.14",)
+
+    async def respond(request):
+        return httpx.Response(200, headers={"content-type": "image/png"}, content=PNG)
+
+    rpc, vision = RPC(), Vision()
+    outcome, generator, platform = await replay(
+        rpc,
+        MediaDownloader(resolver=resolve, transport=httpx.MockTransport(respond)),
+        vision,
+        source_copies=2,
+    )
+    assert outcome == "media_error"
+    assert rpc.calls == [] and vision.images == [] and platform.sent == []
+    assert len(generator.requests) == 1

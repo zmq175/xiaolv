@@ -34,7 +34,7 @@ class OneBotImageInterpreter:
     ) -> None:
         self._rpc, self._routes = rpc, dict(routes)
         self._downloader, self._vision = downloader, vision
-        self.processor = vision.processor
+        self.processor = f"{vision.processor}|image-normalizer:v1"
         self._normalizer = ImageNormalizer()
 
     async def interpret(

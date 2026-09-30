@@ -47,6 +47,8 @@ class InboundImages:
         if candidate.conversation_id not in self._conversations:
             return candidate
         messages = list(candidate.context.messages)
+        if sum(event.message_id == candidate.source_message_id for event in messages) > 1:
+            raise MediaUnavailable()
 
         async def before_vision() -> None:
             await require_permission(candidate.conversation_id)
@@ -60,6 +62,15 @@ class InboundImages:
             if len(images) != 1 or event.conversation_id != candidate.conversation_id:
                 raise MediaUnavailable()
             part_index = images[0]
+            cached = event.parts[part_index].interpretation
+            if (
+                cached is not None
+                and cached.processor == self._interpreter.processor
+                and cached.kind == "image_description"
+                and cached.text.strip()
+                and len(cached.text) <= 3000
+            ):
+                continue
             try:
                 interpretation = await self._interpreter.interpret(
                     event, part_index, candidate.expires_at, before_vision
