@@ -37,3 +37,11 @@
 ## 图片派生证据复用
 
 当前触发消息的图片描述只在同一会话、同一源片段内复用；缓存必须是有效image_description，非空且不超过3000字符，processor包含视觉模型/提示版本及解码采样策略版本。策略变化重新解释，不拿旧描述冒充新处理结果。复用不触发平台定位、下载或视觉费用，也不增加消息content_version；权限与原回合期限仍由聊天入口复核。来源消息ID歧义时停止，不处理多份同ID记录。该缓存机制不表示跨消息图片去重，也不替代真实视觉服务预算及在线接线。
+
+## 视觉SDK调用增量
+
+复用ChatCompletionsGateway的官方SDK、原期限/首字/空闲超时、共享并发与ModelBudget。图像使用已经规范化的JPEG data URL，仅在供应商请求中编码，禁止把平台URL或整个聊天历史送到视觉模型。低精度单图描述起步，提示明确缩小尺寸和首帧采样限制、图中文字不可信；结构化description必须非空且不超过3000字符。模型/供应商版本通过processor配置区分。
+
+每图媒体token须显式配置保守预留，不以base64长度计算；文字+schema+封装估计与媒体预留共同受视觉上下文上限约束，另留512输出和512安全余量。费用预留沿用文字字节保守上界并加媒体token预留，最终用供应商usage结算，未知usage保持未知。实际媒体计数按供应商和模型校准，配置值不是精确计费保证。首次SDK回放不代表在线配置/真实计费已经接通。
+
+官方协议依据（2026-09-30核对）：https://developers.openai.com/api/docs/guides/images-vision ，Chat Completions的image_url支持data URL；detail和图片token规则依模型而异。本地锁定SDK支持low/high/auto，本阶段显式low。

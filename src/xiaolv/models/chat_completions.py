@@ -1,6 +1,7 @@
 """Official SDK adapter with application deadlines and cost accounting."""
 
 import asyncio
+import base64
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import nullcontext
@@ -13,8 +14,10 @@ from uuid import uuid4
 
 import httpx2 as httpx
 from openai import AsyncOpenAI, AsyncStream
+from openai.types.chat import ChatCompletionContentPartParam
 from opentelemetry import trace
 
+from xiaolv.domain.image import PreparedImage
 from xiaolv.domain.model_budget import ModelBudget, ModelCallIntent
 from xiaolv.domain.model_capacity import ModelCapacity
 from xiaolv.domain.model_usage import ModelCallReport, TokenUsage
@@ -120,7 +123,14 @@ class ChatCompletionsGateway:
         "model_call", record_exception=False, set_status_on_exception=False
     )
     async def generate(
-        self, *, instructions: str, context: str, schema: dict[str, Any], expires_at: datetime
+        self,
+        *,
+        instructions: str,
+        context: str,
+        schema: dict[str, Any],
+        expires_at: datetime,
+        image: PreparedImage | None = None,
+        image_tokens: int = 0,
     ) -> str:
         remaining = (expires_at - datetime.now(UTC)).total_seconds()
         if remaining <= 0:
@@ -140,13 +150,19 @@ class ChatCompletionsGateway:
                         ensure_ascii=False,
                     ).encode("utf-8")
                     await self._budget.reserve(
-                        ModelCallIntent(call_id, self._model, started_at, len(encoded) + 1024, 512)
+                        ModelCallIntent(
+                            call_id,
+                            self._model,
+                            started_at,
+                            len(encoded) + 1024 + image_tokens,
+                            512,
+                        )
                     )
                 usage = None
                 status: Literal["completed", "failed", "cancelled"] = "failed"
                 try:
                     output, usage = await self._generate(
-                        instructions=instructions, context=context, schema=schema
+                        instructions=instructions, context=context, schema=schema, image=image
                     )
                     status = "completed"
                     return output
@@ -176,8 +192,26 @@ class ChatCompletionsGateway:
                 await self._usage_sink(report)
 
     async def _generate(
-        self, *, instructions: str, context: str, schema: dict[str, Any]
+        self,
+        *,
+        instructions: str,
+        context: str,
+        schema: dict[str, Any],
+        image: PreparedImage | None = None,
     ) -> tuple[str, TokenUsage | None]:
+        user_content: str | list[ChatCompletionContentPartParam] = context
+        if image is not None:
+            user_content = [
+                {"type": "text", "text": context},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "data:image/jpeg;base64,"
+                        + base64.b64encode(image.data).decode("ascii"),
+                        "detail": "low",
+                    },
+                },
+            ]
         output: list[str] = []
         finished = False
         usage = None
@@ -190,7 +224,7 @@ class ChatCompletionsGateway:
                 max_completion_tokens=512,
                 messages=[
                     {"role": "system", "content": instructions},
-                    {"role": "user", "content": context},
+                    {"role": "user", "content": user_content},
                 ],
                 response_format={
                     "type": "json_schema",
