@@ -53,3 +53,5 @@
 XIAOLV_VISION为可选JSON配置，默认不启用。须显式配置服务地址/密钥/模型、供应商与价格版本/输入输出单价、processor_version、image_tokens/window_tokens、conversations；concurrency默认1。会话必须在已启用IM路由内，金额池沿用monthly_external_budget_cny的external池，视觉单独共享并发池。配置拒绝空标识、错误地址、非正/布尔预算、无会话或越权会话，报错不含密钥。真实在线组合ImageDescriber、原生图片解析和PostgresInterpretations，描述持久化继续核对源快照/epoch/授权/原期限；配置接线完成也不代表真实QQ和供应商兼容性已验收。
 
 在线图像派生结果验收：视觉HTTP响应被阻塞时，管理员通过真实HTTP停用会话/停用后恢复，或等待原TTL到达；释放迟到响应后均不发送、不发布描述。服务重启后由新消息读取原图片，仍为content_version=1、unprocessed；另一群的上下文不含原群描述。此为真实PG/本地HTTP/平台WebSocket上的组合验收，外部供应商取消是否生效以及未知费用最终账单仍须实际环境核对。
+
+视觉失败费用验收：在真实PG账本与聊天回放中，供应商HTTP一直阻塞直到原TTL，或返回429时，均只有一次视觉请求且没有回复。未知usage不释放金额预留；重建数据库连接后预留仍在，下一次超额请求在HTTP前被拒绝。此策略不判定429实际是否计费，最终仍需供应商凭据对账。

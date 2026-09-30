@@ -1,5 +1,6 @@
 """Real monetary ledger with native-image chat replay and synthetic provider HTTP."""
 
+import asyncio
 import json
 from decimal import Decimal
 
@@ -29,11 +30,15 @@ def policy():
     )
 
 
-async def run_image(engine, *, image_tokens, known_usage=True):
+async def run_image(engine, *, image_tokens, known_usage=True, provider_mode="success", ttl=5):
     requests = []
 
     async def serve(request):
         requests.append(request)
+        if provider_mode == "stall":
+            await asyncio.Event().wait()
+        if provider_mode == "reject":
+            return httpx2.Response(429, json={"error": {"message": "synthetic rejection"}})
         response = stream_json({"description": "合成图片"})
         if known_usage:
             usage = {
@@ -69,6 +74,7 @@ async def run_image(engine, *, image_tokens, known_usage=True):
             ImageDescriber(
                 gateway, processor="synthetic:v1", image_tokens=image_tokens, window_tokens=16384
             ),
+            ttl=ttl,
         )
     return outcome, generator, platform, requests
 
@@ -112,5 +118,33 @@ async def test_vision_usage_and_unknown_reservations_survive_restart(database_ur
             assert outcome == "confirmed" and len(requests) == 1
         else:
             assert outcome == "budget_denied" and requests == [] and platform.sent == []
+    finally:
+        await rebuilt.dispose()
+
+
+@pytest.mark.parametrize(
+    "provider_mode,expected", [("stall", "expired"), ("reject", "media_error")]
+)
+async def test_failed_vision_keeps_unknown_cost_and_never_retries(
+    database_url, provider_mode, expected
+):
+    engine = create_async_engine(database_url, hide_parameters=True)
+    try:
+        outcome, generator, platform, requests = await asyncio.wait_for(
+            run_image(engine, image_tokens=1, provider_mode=provider_mode, ttl=2), 6
+        )
+        assert outcome == expected
+        assert len(requests) == 1 and platform.sent == []
+        assert len(generator.requests) == 1
+    finally:
+        await engine.dispose()
+    rebuilt = create_async_engine(database_url, hide_parameters=True)
+    try:
+        snapshot = await PostgresModelBudget(rebuilt, policy()).snapshot()
+        assert snapshot.spent == Decimal(0)
+        assert Decimal("0.002") < snapshot.reserved <= Decimal("0.004")
+        outcome, _, platform, requests = await run_image(rebuilt, image_tokens=1)
+        assert outcome == "budget_denied"
+        assert requests == [] and platform.sent == []
     finally:
         await rebuilt.dispose()
