@@ -47,3 +47,7 @@
 官方协议依据（2026-09-30核对）：https://developers.openai.com/api/docs/guides/images-vision ，Chat Completions的image_url支持data URL；detail和图片token规则依模型而异。本地锁定SDK支持low/high/auto，本阶段显式low。
 
 视觉金额集成验收补充：经聊天回放入口与真实PostgreSQL账本，使用相同文字/图片、只改变显式媒体预留的用例验证金额门槛；已知usage按实际输入/输出结算，未知usage保留预留。重建数据库连接后通过公开账本快照和再次聊天调用观察费用状态，不直接查询内部表。测试供应商为合成HTTP响应，实际供应商图片计数和价格仍需上线前校准。
+
+## 在线配置接线
+
+XIAOLV_VISION为可选JSON配置，默认不启用。须显式配置服务地址/密钥/模型、供应商与价格版本/输入输出单价、processor_version、image_tokens/window_tokens、conversations；concurrency默认1。会话必须在已启用IM路由内，金额池沿用monthly_external_budget_cny的external池，视觉单独共享并发池。配置拒绝空标识、错误地址、非正/布尔预算、无会话或越权会话，报错不含密钥。真实在线组合ImageDescriber、原生图片解析和PostgresInterpretations，描述持久化继续核对源快照/epoch/授权/原期限；配置接线完成也不代表真实QQ和供应商兼容性已验收。

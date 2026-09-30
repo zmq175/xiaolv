@@ -1,7 +1,10 @@
 """Composition root for the native text service."""
 
 import asyncio
+import hashlib
+import json
 import logging
+from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -14,6 +17,7 @@ from websockets.exceptions import WebSocketException
 
 from xiaolv.application.chat_worker import ChatWorker
 from xiaolv.application.delivery import DeliveryService
+from xiaolv.application.inbound_images import InboundImages
 from xiaolv.application.inbound_speech import InboundSpeech
 from xiaolv.application.incoming import IncomingMessages
 from xiaolv.application.speech_execution import SpeechExecution
@@ -25,8 +29,11 @@ from xiaolv.models.chat_completions import ChatCompletionsGateway
 from xiaolv.models.conversation import ChatCompletionsModel
 from xiaolv.models.fish_audio import FishAudioProvider
 from xiaolv.models.tokenizer import load_tokenizer
+from xiaolv.models.vision import ImageDescriber
 from xiaolv.orchestration.text_runtime import TextRuntime
+from xiaolv.platforms.media_http import MediaDownloader, resolve_public_candidate
 from xiaolv.platforms.onebot import OneBotPreparation, OneBotSender, QQTarget
+from xiaolv.platforms.onebot_images import OneBotImageInterpreter
 from xiaolv.platforms.onebot_ingress import IngressError, OneBotIngress
 from xiaolv.platforms.onebot_speech import OneBotSpeechTranscriber
 from xiaolv.platforms.onebot_ws import OneBotWebSocket
@@ -70,6 +77,8 @@ async def run_live(
     *,
     statistics: LiveSummary | None = None,
     speech_transport: httpx.AsyncBaseTransport | None = None,
+    media_transport: httpx.AsyncBaseTransport | None = None,
+    media_resolver: Callable[[str, int], Awaitable[tuple[str, ...]]] = resolve_public_candidate,
 ) -> LiveSummary:
     if settings.mode != "live":
         raise ConfigError("live mode is required")
@@ -144,6 +153,65 @@ async def run_live(
                 raise LiveRuntimeError("onebot_login_invalid")
             if data["user_id"] != self_id:
                 raise LiveRuntimeError("onebot_account_mismatch")
+            inbound_images = None
+            if settings.vision is not None:
+                vision = settings.vision
+                vision_capacity = PostgresModelCapacity(engine, "vision-model", vision.concurrency)
+                try:
+                    await vision_capacity.initialize()
+                except ValueError:
+                    raise ConfigError("shared vision capacity configuration conflict") from None
+                vision_gateway = await resources.enter_async_context(
+                    ChatCompletionsGateway(
+                        base_url=vision.base_url,
+                        api_key=vision.api_key.get_secret_value(),
+                        model=vision.model,
+                        concurrency=vision.concurrency,
+                        budget=PostgresModelBudget(
+                            engine,
+                            BudgetPolicy(
+                                "external",
+                                vision.provider,
+                                vision.model,
+                                vision.price_version,
+                                _required(settings.monthly_external_budget_cny),
+                                vision.input_cny_per_million,
+                                vision.output_cny_per_million,
+                                vision.cached_input_cny_per_million,
+                            ),
+                        ),
+                        shared_capacity=vision_capacity,
+                        usage_sink=_log_model_usage,
+                    )
+                )
+                processor = (
+                    "vision:v1:"
+                    + hashlib.sha256(
+                        json.dumps(
+                            [
+                                vision.base_url,
+                                vision.provider,
+                                vision.model,
+                                vision.processor_version,
+                            ]
+                        ).encode()
+                    ).hexdigest()
+                )
+                inbound_images = InboundImages(
+                    OneBotImageInterpreter(
+                        rpc,
+                        routes,
+                        MediaDownloader(resolver=media_resolver, transport=media_transport),
+                        ImageDescriber(
+                            vision_gateway,
+                            processor=processor,
+                            image_tokens=vision.image_tokens,
+                            window_tokens=vision.window_tokens,
+                        ),
+                    ),
+                    vision.conversations,
+                    store=PostgresInterpretations(engine),
+                )
             artifacts = None
             speech_provider = None
             speech_capacity = None
@@ -231,6 +299,7 @@ async def run_live(
                     max_chars=settings.max_reply_chars,
                     profile_loader=PublishedProfiles(engine, settings.bot_profile).load,
                     voice_delivery=voice_delivery,
+                    inbound_images=inbound_images,
                     inbound_speech=InboundSpeech(
                         OneBotSpeechTranscriber(rpc, routes),
                         settings.native_asr_conversations,

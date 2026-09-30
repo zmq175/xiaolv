@@ -95,6 +95,17 @@ class Services:
                         }
                     )
                 )
+            elif request["action"] == "get_image":
+                await ws.send(
+                    json.dumps(
+                        {
+                            "status": "ok",
+                            "retcode": 0,
+                            "echo": request["echo"],
+                            "data": {"url": "https://media.example/image?signature=PRIVATE"},
+                        }
+                    )
+                )
             elif request["action"] == "fetch_ptt_text":
                 self.transcriptions.append(request["params"])
                 self.transcription_started.set()
@@ -174,6 +185,8 @@ class Services:
                 if self.voice is not None:
                     value["parts"] = []
                     value["reply_to"] = None
+            if "description" in properties:
+                value = {"description": "持久化的合成图片描述"}
             chunks = [
                 {
                     "choices": [

@@ -67,9 +67,64 @@ class SpeechSettings(BaseModel):
         return self
 
 
+class VisionSettings(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
+
+    base_url: str
+    api_key: SecretStr
+    model: str
+    provider: str
+    price_version: str
+    processor_version: str
+    input_cny_per_million: Money
+    output_cny_per_million: Money
+    cached_input_cny_per_million: Money | None = None
+    image_tokens: int = Field(strict=True, ge=1, le=2_000_000)
+    window_tokens: int = Field(strict=True, ge=1024, le=2_000_000)
+    conversations: tuple[str, ...]
+    concurrency: int = Field(default=1, strict=True, ge=1, le=32)
+
+    @model_validator(mode="after")
+    def validate_vision(self) -> Self:
+        parsed = urlsplit(self.base_url)
+        secret = self.api_key.get_secret_value()
+        if (
+            not parsed.hostname
+            or parsed.port == 0
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+            or any(char.isspace() for char in self.base_url)
+            or not (
+                parsed.scheme == "https"
+                or (
+                    parsed.scheme == "http" and parsed.hostname in {"localhost", "127.0.0.1", "::1"}
+                )
+            )
+            or not secret
+            or not secret.isascii()
+            or any(char.isspace() for char in secret)
+            or any(
+                not value.strip()
+                for value in (self.model, self.provider, self.price_version, self.processor_version)
+            )
+            or not self.conversations
+            or len(set(self.conversations)) != len(self.conversations)
+            or self.window_tokens <= self.image_tokens + 2048
+            or (
+                self.cached_input_cny_per_million is not None
+                and self.cached_input_cny_per_million > self.input_cny_per_million
+            )
+        ):
+            raise ValueError("invalid vision configuration")
+        return self
+
+
 class Settings(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
 
+    vision: VisionSettings | None = None
     speech: SpeechSettings | None = None
     native_asr_conversations: tuple[str, ...] = ()
     speech_recovery_interval_seconds: float = Field(default=30, gt=0, le=3600, allow_inf_nan=False)
@@ -113,6 +168,16 @@ class Settings(BaseModel):
             )
             if not set(self.native_asr_conversations).issubset(asr_routes):
                 raise ValueError("invalid native ASR scope")
+        if self.vision is not None:
+            vision_routes = {f"qq:{self.qq_self_id}:group:{id}" for id in self.enabled_group_ids}
+            vision_routes.update(
+                f"qq:{self.qq_self_id}:private:{id}" for id in self.enabled_private_ids
+            )
+            if (
+                not set(self.vision.conversations).issubset(vision_routes)
+                or self.monthly_external_budget_cny is None
+            ):
+                raise ValueError("invalid vision scope or budget")
         if self.speech is not None:
             routes = {f"qq:{self.qq_self_id}:group:{id}" for id in self.enabled_group_ids}
             routes.update(f"qq:{self.qq_self_id}:private:{id}" for id in self.enabled_private_ids)
@@ -191,6 +256,7 @@ def load_settings(environ: Mapping[str, str]) -> Settings:
         "delivery_policy",
         "context_policy",
         "speech",
+        "vision",
         "native_asr_conversations",
     ):
         key = "XIAOLV_" + name.upper()

@@ -46,6 +46,8 @@ PYTHONPATH=src uv run python -m xiaolv
 
 语音的显式启用、费用预留与音频保留策略见[在线语音服务](docs/live-voice-service.md)，真实供应商和QQ播放仍待验收。
 
+图片理解的按会话启用、模型配置与媒体预算见[在线图片服务](docs/live-image-service.md)，真实供应商、CDN和QQ样本仍待验收。
+
 数据库开发说明见[持久化测试与迁移](docs/postgres-development.md)。完整进度见[开发状态](docs/development-status.md)。
 
 独立管理进程的密码初始化、浏览器登录和SSH访问方式见[管理服务](docs/admin-service.md)。登录/会话/退出页面已接真实接口，配置发布和运行概览仍在开发。
