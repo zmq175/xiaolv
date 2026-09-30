@@ -15,3 +15,17 @@
 定向聊天/上下文回归64项通过（7.33秒），ruff检查通过，mypy72源文件通过。固定三轮/四次上限已存在，但配置绑定、撤权/到期/费用专门验收、稳定工具失败处理、来源引用约束及真实搜索质量仍待后续切片；不宣称SPEC-042整体完成。
 
 本切片非数据库完整回归：465项通过（17.35秒）。本次未执行真实PG或供应商调用，不据此声称持久费用路径完成验收。
+
+## 搜索失败与官方SDK适配器（2026-09-30）
+
+TDD先复现搜索异常/超时被错误归为model_error，现稳定返回tool_error；仍保留PermissionDenied/BudgetDenied和任务取消语义，不自动重试。另复现跨轮复用相同tool_call_id导致第二次搜索，现拒绝重复ID。聊天入口验证沉默、未授权会话及模型选择不用工具均不请求搜索。
+
+引入锁定的tavily-python 0.8.4，通过其公开client参数注入自有httpx客户端，不替换SDK私有字段。完整聊天入口对HTTP边界验证/search及basic、auto_parameters=false、include_usage=true、关闭answer/raw_content/images等参数。响应以严格结构转换为搜索摘要；补充合成流测试，先复现4MiB无关字段被完整读取仍成功回复，再在解析JSON前限制响应为1MiB，超限关闭流、不继续模型或发送。客户端拒绝响应压缩以避免解压膨胀，不跟随重定向、不使用环境代理。
+
+11项工具入口测试及配置/上下文合计36项通过（1.57秒）；ruff通过，mypy74源文件通过。所有搜索请求均使用httpx.MockTransport，无真实Tavily请求或费用。
+
+仍未完成：credit预留/结算（当前SDK usage尚未接持久账本）、URLRef/read_page、搜索来源完整元数据/引用校验、在线接线和真实搜索效果。适配器存在不代表生产可启用，run_live的未接线拒绝保持有效。
+
+SDK依据：https://github.com/tavily-ai/tavily-python ，并核对本地锁定0.8.4实际源码；参数依据：https://docs.tavily.com/documentation/api-reference/endpoint/search 。
+
+本切片非数据库完整回归：473项通过（17.61秒）。本次未运行PG费用测试，尚不能证明跨实例/重启credit约束。

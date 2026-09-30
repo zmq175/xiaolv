@@ -9,7 +9,9 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from xiaolv.domain.authorization import PermissionDenied
 from xiaolv.domain.context_policy import ContextOverflow, ContextPolicy
+from xiaolv.domain.model_budget import BudgetDenied
 from xiaolv.domain.web import NativeToolTurn, SearchHit, ToolUnavailable
 
 if TYPE_CHECKING:
@@ -87,6 +89,7 @@ class WebTools:
         ]
         evidence = list(candidate.tool_results)
         seen: set[str] = set()
+        call_ids: set[str] = set()
         calls_used = 0
 
         async def allowed() -> None:
@@ -112,7 +115,7 @@ class WebTools:
                 raise ToolUnavailable()
             validated = []
             for call in turn.calls:
-                if call.name != "web_search":
+                if call.id in call_ids or call.name != "web_search":
                     raise ToolUnavailable()
                 try:
                     args = _Search.model_validate_json(call.arguments)
@@ -125,6 +128,7 @@ class WebTools:
                 if key in seen:
                     raise ToolUnavailable()
                 seen.add(key)
+                call_ids.add(call.id)
                 validated.append((call, args))
             messages.append(
                 {
@@ -142,8 +146,16 @@ class WebTools:
             )
             for call, args in validated:
                 await allowed()
-                async with asyncio.timeout(8):
-                    hits = await self._search.search(args.query, args.count, candidate.expires_at)
+                try:
+                    async with asyncio.timeout(8):
+                        hits = await self._search.search(
+                            args.query, args.count, candidate.expires_at
+                        )
+                except (PermissionDenied, BudgetDenied):
+                    raise
+                except Exception as exc:
+                    await allowed()
+                    raise ToolUnavailable() from exc
                 await allowed()
                 result = {
                     "kind": "search_snippets",
