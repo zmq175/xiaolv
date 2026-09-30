@@ -108,3 +108,67 @@ async def test_provider_charge_above_reservation_blocks_further_searches(databas
         assert outcome == "budget_denied" and sent == [] and requests == []
     finally:
         await engine.dispose()
+
+
+async def run_extract(engine, *, credits, limit=2, failed=False):
+    from test_page_reader import public_dns, read_page
+
+    from xiaolv.storage.web_credits import PostgresWebCredits
+    from xiaolv.web.tavily import TavilySearchProvider
+
+    requests = []
+
+    async def serve(request):
+        requests.append(request)
+        response = {
+            "results": []
+            if failed
+            else [{"url": "https://example.com/article", "raw_content": "合成正文。"}],
+            "failed_results": [{"url": "https://example.com/article", "error": "synthetic failure"}]
+            if failed
+            else [],
+        }
+        if credits is not None:
+            response["usage"] = {"credits": credits}
+        return httpx.Response(200, json=response)
+
+    async with TavilySearchProvider(
+        api_key="synthetic",
+        transport=httpx.MockTransport(serve),
+        resolver=public_dns,
+        credits=PostgresWebCredits(engine, monthly_limit=limit),
+    ) as provider:
+        outcome, sent, _ = await read_page(provider)
+    return outcome, sent, requests
+
+
+async def test_extract_and_search_share_pool_and_keep_fractional_credits(database_url):
+    engine = create_async_engine(database_url, hide_parameters=True)
+    try:
+        outcome, sent, requests = await run_extract(engine, credits=0.2)
+        assert outcome == "confirmed" and len(sent) == 1 and len(requests) == 1
+        outcome, sent, requests = await run_search(engine, credits=1, limit=2)
+        assert outcome == "confirmed" and len(sent) == 1 and len(requests) == 1
+    finally:
+        await engine.dispose()
+    rebuilt = create_async_engine(database_url, hide_parameters=True)
+    try:
+        outcome, sent, requests = await run_extract(rebuilt, credits=0.2)
+        assert outcome == "budget_denied" and sent == [] and requests == []
+    finally:
+        await rebuilt.dispose()
+
+
+@pytest.mark.parametrize("credits", [0, None])
+async def test_failed_extraction_only_releases_explicitly_known_zero_charge(database_url, credits):
+    engine = create_async_engine(database_url, hide_parameters=True)
+    try:
+        outcome, sent, requests = await run_extract(engine, credits=credits, limit=1, failed=True)
+        assert outcome == "tool_error" and sent == [] and len(requests) == 1
+        outcome, sent, requests = await run_search(engine, credits=1, limit=1)
+        if credits == 0:
+            assert outcome == "confirmed" and len(sent) == 1 and len(requests) == 1
+        else:
+            assert outcome == "budget_denied" and sent == [] and requests == []
+    finally:
+        await engine.dispose()

@@ -1,7 +1,9 @@
 """Official Tavily SDK adapter; not wired online until persistent credits exist."""
 
 import asyncio
-from collections.abc import AsyncIterator
+import ipaddress
+import socket
+from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from types import TracebackType
@@ -14,6 +16,12 @@ from tavily import AsyncTavilyClient  # type: ignore[import-untyped]
 
 from xiaolv.domain.web import SearchHit, ToolUnavailable
 from xiaolv.domain.web_credits import WebCredits
+from xiaolv.domain.web_url import eligible_page_url
+
+
+async def resolve_page_host(host: str, port: int) -> tuple[str, ...]:
+    rows = await asyncio.get_running_loop().getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    return tuple(dict.fromkeys(str(row[4][0]) for row in rows))
 
 
 class _Hit(BaseModel):
@@ -28,6 +36,18 @@ class _SearchResponse(BaseModel):
     results: list[_Hit] = Field(max_length=5)
 
 
+class _Page(BaseModel):
+    model_config = ConfigDict(strict=True, hide_input_in_errors=True)
+    url: str = Field(min_length=1, max_length=8192)
+    raw_content: str = Field(min_length=1, max_length=500000)
+
+
+class _ExtractResponse(BaseModel):
+    model_config = ConfigDict(strict=True, hide_input_in_errors=True)
+    results: list[_Page] = Field(max_length=1)
+    failed_results: list[dict[str, object]] = Field(max_length=1)
+
+
 class TavilySearchProvider:
     def __init__(
         self,
@@ -35,8 +55,10 @@ class TavilySearchProvider:
         api_key: str,
         transport: httpx.AsyncBaseTransport | None = None,
         credits: WebCredits | None = None,
+        resolver: Callable[[str, int], Awaitable[tuple[str, ...]]] = resolve_page_host,
     ) -> None:
         self._credits = credits
+        self._resolver = resolver
         self._http = httpx.AsyncClient(
             base_url="https://api.tavily.com",
             transport=transport,
@@ -84,6 +106,62 @@ class TavilySearchProvider:
                 return tuple(
                     SearchHit(hit.title, hit.url, hit.content) for hit in parsed.results[:count]
                 )
+            finally:
+                if self._credits is not None:
+                    await asyncio.shield(self._settle(call_id, charged))
+
+    async def read(self, url: str, expires_at: datetime) -> str:
+        remaining = (expires_at - datetime.now(UTC)).total_seconds()
+        if remaining <= 0:
+            raise TimeoutError()
+        call_id = uuid4().hex
+        charged = None
+        async with asyncio.timeout(remaining):
+            if not eligible_page_url(url):
+                raise ToolUnavailable()
+            target = httpx.URL(url)
+            addresses = await self._resolver(
+                target.host, target.port or (443 if target.scheme == "https" else 80)
+            )
+            if not addresses:
+                raise ToolUnavailable()
+            for raw in addresses:
+                address = ipaddress.ip_address(raw)
+                if (
+                    not address.is_global
+                    or address.is_multicast
+                    or address.is_reserved
+                    or (
+                        isinstance(address, ipaddress.IPv6Address)
+                        and (
+                            address.ipv4_mapped is not None
+                            or address.sixtofour is not None
+                            or address.teredo is not None
+                            or address in ipaddress.ip_network("64:ff9b::/96")
+                            or address in ipaddress.ip_network("64:ff9b:1::/48")
+                        )
+                    )
+                ):
+                    raise ToolUnavailable()
+            if self._credits is not None:
+                await self._credits.reserve(call_id, "extract", expires_at)
+            try:
+                response = await self._sdk.extract(
+                    urls=[url],
+                    extract_depth="basic",
+                    format="markdown",
+                    include_usage=True,
+                    include_images=False,
+                    timeout=min(remaining, 8),
+                )
+                charged = _parse_credits(response.get("usage"))
+                parsed = _ExtractResponse.model_validate(response)
+                if len(parsed.results) != 1 or parsed.failed_results:
+                    raise ToolUnavailable()
+                page = parsed.results[0]
+                if page.url != url or not page.raw_content.strip():
+                    raise ToolUnavailable()
+                return page.raw_content
             finally:
                 if self._credits is not None:
                     await asyncio.shield(self._settle(call_id, charged))
