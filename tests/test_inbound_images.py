@@ -687,3 +687,31 @@ async def test_joint_image_evidence_is_reused_as_a_complete_group():
     row = json.loads(generator.requests[-1]["context"])["messages"][0]
     assert row["content_version"] == 1
     assert row["parts"][2]["interpretation"]["source_media_refs"] == ["media_1_1", "media_1_3"]
+
+
+async def test_entire_image_group_is_verified_before_any_download():
+    from xiaolv.platforms.media_http import MediaDownloader
+
+    rpc, vision = RPC(), Vision()
+    rpc.source_changes["message"] = [
+        {"type": "image", "data": {"file": "first"}},
+        {"type": "image", "data": {"file": "unexpected"}},
+    ]
+    downloads = []
+
+    async def resolve(host, port):
+        return ("93.184.215.14",)
+
+    async def respond(request):
+        downloads.append(request)
+        return httpx.Response(200, headers={"content-type": "image/png"}, content=PNG)
+
+    outcome, _, platform = await replay(
+        rpc,
+        MediaDownloader(resolver=resolve, transport=httpx.MockTransport(respond)),
+        vision,
+        parts=(MessagePart("image", reference="first"), MessagePart("image", reference="second")),
+    )
+    assert outcome == "media_error" and vision.images == [] and platform.sent == []
+    assert rpc.calls == [("get_msg", {"message_id": 1})]
+    assert downloads == []

@@ -16,7 +16,7 @@ from xiaolv.platforms.onebot import OneBotRPC, QQTarget, _message_data
 class VisionDescriber(Protocol):
     """Describe normalized pixels, preserving sampling limits and reserving media cost.
 
-    Decoding occurs before this boundary. No production vision provider is wired yet.
+    Decoding occurs before this boundary; the live service supplies the configured SDK provider.
     """
 
     processor: str
@@ -57,7 +57,7 @@ class OneBotImageInterpreter:
         if source is None or f"qq:{source.get('user_id')}" != event.sender_account_id:
             raise MediaUnavailable()
         indices = (part_index,) if isinstance(part_index, int) else part_index
-        prepared_images = []
+        references = []
         for index in indices:
             reference = event.parts[index].reference
             segments = source.get("message")
@@ -72,6 +72,9 @@ class OneBotImageInterpreter:
                 or not reference
             ):
                 raise MediaUnavailable()
+            references.append(reference)
+        prepared_images = []
+        for reference in references:
             response = await self._rpc.call("get_image", {"file": reference})
             data = response.get("data")
             if (

@@ -12,11 +12,17 @@ from xiaolv.live import LiveSummary, run_live
 
 
 @pytest.mark.parametrize(
-    "enabled,next_group,image_count",
-    [(True, 20000, 1), (True, 20000, 2), (True, 30000, 1), (False, 20000, 1)],
+    "enabled,next_group,image_count,broken",
+    [
+        (True, 20000, 1, False),
+        (True, 20000, 2, False),
+        (True, 30000, 1, False),
+        (False, 20000, 1, False),
+        (True, 20000, 2, True),
+    ],
 )
 async def test_online_image_description_survives_restart(
-    database_url, services, enabled, next_group, image_count
+    database_url, services, enabled, next_group, image_count, broken
 ):
     config = vision_configuration()
     config["base_url"] = services.model_url
@@ -39,9 +45,10 @@ async def test_online_image_description_survives_restart(
 
     async def download(request):
         downloads.append(request)
-        return httpx.Response(200, headers={"content-type": "image/png"}, content=PNG)
+        raw = b"broken image" if broken and len(downloads) == 2 else PNG
+        return httpx.Response(200, headers={"content-type": "image/png"}, content=raw)
 
-    async def run_once():
+    async def run_once(expected="confirmed"):
         stop, stats = asyncio.Event(), LiveSummary()
         task = asyncio.create_task(
             run_live(
@@ -54,7 +61,7 @@ async def test_online_image_description_survives_restart(
         )
         try:
             await until(lambda: bool(stats.outcomes), task)
-            assert stats.outcomes == {"confirmed": 1}
+            assert stats.outcomes == {expected: 1}
         finally:
             stop.set()
             try:
@@ -63,11 +70,23 @@ async def test_online_image_description_survives_restart(
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
 
-    await run_once()
+    await run_once("media_error" if broken else "confirmed")
     if not enabled:
         assert len(services.model_requests) == 2 and downloads == []
         reply = services.model_requests[-1]["messages"][1]["content"]
         assert "unprocessed" in reply and "持久化的合成图片描述" not in reply
+        return
+    if broken:
+        assert len(services.model_requests) == 1 and services.sent == []
+        assert len(downloads) == 2
+        services.frames = [message(message_id=2, content="换个话题")]
+        await run_once()
+        context = json.loads(services.model_requests[-1]["messages"][1]["content"])
+        original = next(row for row in context["messages"] if "parts" in row)
+        assert original["content_version"] == 1
+        assert len(original["parts"]) == 2
+        assert all(part["status"] == "unprocessed" for part in original["parts"])
+        assert len(services.model_requests) == 3 and len(downloads) == 2
         return
     assert len(services.model_requests) == 3
     assert len(downloads) == image_count
