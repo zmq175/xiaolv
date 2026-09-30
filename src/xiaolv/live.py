@@ -82,6 +82,8 @@ async def run_live(
 ) -> LiveSummary:
     if settings.mode != "live":
         raise ConfigError("live mode is required")
+    if settings.web is not None:
+        raise ConfigError("web tool execution is not wired yet")
     try:
         await asyncio.to_thread(load_tokenizer, settings.context_policy.encoding)
     except ValueError as exc:

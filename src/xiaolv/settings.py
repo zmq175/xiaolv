@@ -67,6 +67,34 @@ class SpeechSettings(BaseModel):
         return self
 
 
+class WebSettings(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
+
+    api_key: SecretStr
+    conversations: tuple[str, ...]
+    monthly_credit_limit: int = Field(default=900, strict=True, ge=1, le=900)
+    max_tool_rounds: int = Field(default=3, strict=True, ge=1, le=3)
+    max_tool_calls: int = Field(default=4, strict=True, ge=1, le=4)
+    max_search_results: int = Field(default=5, strict=True, ge=1, le=5)
+    max_page_tokens: int = Field(default=4000, strict=True, ge=1, le=8000)
+    call_timeout_seconds: float = Field(default=8, strict=True, gt=0, le=30, allow_inf_nan=False)
+    concurrency: int = Field(default=1, strict=True, ge=1, le=8)
+
+    @model_validator(mode="after")
+    def validate_web(self) -> Self:
+        secret = self.api_key.get_secret_value()
+        if (
+            not secret
+            or not secret.isascii()
+            or any(char.isspace() for char in secret)
+            or not self.conversations
+            or len(set(self.conversations)) != len(self.conversations)
+            or self.max_tool_calls < self.max_tool_rounds
+        ):
+            raise ValueError("invalid web configuration")
+        return self
+
+
 class VisionSettings(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
 
@@ -124,6 +152,7 @@ class VisionSettings(BaseModel):
 class Settings(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid", hide_input_in_errors=True)
 
+    web: WebSettings | None = None
     vision: VisionSettings | None = None
     speech: SpeechSettings | None = None
     native_asr_conversations: tuple[str, ...] = ()
@@ -168,6 +197,13 @@ class Settings(BaseModel):
             )
             if not set(self.native_asr_conversations).issubset(asr_routes):
                 raise ValueError("invalid native ASR scope")
+        if self.web is not None:
+            web_routes = {f"qq:{self.qq_self_id}:group:{id}" for id in self.enabled_group_ids}
+            web_routes.update(
+                f"qq:{self.qq_self_id}:private:{id}" for id in self.enabled_private_ids
+            )
+            if not set(self.web.conversations).issubset(web_routes):
+                raise ValueError("invalid web scope")
         if self.vision is not None:
             vision_routes = {f"qq:{self.qq_self_id}:group:{id}" for id in self.enabled_group_ids}
             vision_routes.update(
@@ -257,6 +293,7 @@ def load_settings(environ: Mapping[str, str]) -> Settings:
         "context_policy",
         "speech",
         "vision",
+        "web",
         "native_asr_conversations",
     ):
         key = "XIAOLV_" + name.upper()
