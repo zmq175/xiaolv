@@ -29,3 +29,13 @@ TDD先复现搜索异常/超时被错误归为model_error，现稳定返回tool_
 SDK依据：https://github.com/tavily-ai/tavily-python ，并核对本地锁定0.8.4实际源码；参数依据：https://docs.tavily.com/documentation/api-reference/endpoint/search 。
 
 本切片非数据库完整回归：473项通过（17.61秒）。本次未运行PG费用测试，尚不能证明跨实例/重启credit约束。
+
+## 持久credit账本（2026-09-30）
+
+新增0017迁移和专用web credit账本，单位与模型金额分开；按数据库UTC月统一tavily池加行锁预留1 credit，再发basic搜索请求。usage.credits使用Decimal结算；缺失/非法数值保留预留，SDK失败或进程中断不会自动退款。实际费用超过预留时记账并冻结本月后续请求。账本只记录调用ID、操作、期限及费用，不保存查询/密钥。PG事务不跨供应商网络请求。
+
+先在聊天入口复现PostgresWebCredits缺失失败，再完成持久化。真实临时PG的10项测试通过（2.52秒）：0/1/缺失/布尔/负数/字符串usage后重建服务，HTTP429/超时不重试且保留额度，两个独立engine竞争最后1 credit只允许一方请求，以及扣费超过预留即使总额尚有余量也阻止下一次搜索。测试不直接读取内部表；观察聊天结果、发送次数和供应商HTTP次数。mypy76源文件通过。
+
+供应商费用依据再次核对：https://docs.tavily.com/documentation/api-credits 。basic搜索每次1 credit；Extract未来将共用同一池，当前尚未实现提取或验证其单页计费粒度。SDK额度参数在适配器层可选以支持现有离线回放，线上接线仍被禁止；线上必须强制提供持久账本后才能启用。尚未完成未知调用的管理端核账、跨月专门验证、实际服务账户额度对账或真实供应商调用。
+
+扩大到既有模型/图片金额路径及工具/配置后，63项回归通过（10.03秒），包括真实临时PG迁移和各费用池隔离；ruff通过。无收费外部请求。
