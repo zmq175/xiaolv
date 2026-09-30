@@ -102,7 +102,12 @@ class ContextAssembler:
                     row["parts"] = parts
                 rows.append(row)
             return json.dumps(
-                {"target_text": candidate.text, "target_truncated": False, "messages": rows},
+                {
+                    "target_text": candidate.text,
+                    "target_truncated": False,
+                    "messages": rows,
+                    **({"tool_results": candidate.tool_results} if candidate.tool_results else {}),
+                },
                 ensure_ascii=False,
             )
 

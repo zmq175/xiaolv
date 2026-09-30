@@ -5,13 +5,14 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
-from typing import Literal, Protocol, TypedDict
+from typing import Any, Literal, Protocol, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
 from xiaolv.application.delivery import DeliveryRequest, DeliveryService
 from xiaolv.application.inbound_images import InboundImages
 from xiaolv.application.inbound_speech import InboundSpeech, MediaUnavailable
+from xiaolv.application.web_tools import WebTools
 from xiaolv.domain.authorization import PermissionDenied
 from xiaolv.domain.bot_profile import ProfileSnapshot
 from xiaolv.domain.chat_event import ConversationContext
@@ -19,6 +20,7 @@ from xiaolv.domain.context_policy import ContextOverflow
 from xiaolv.domain.model_budget import BudgetDenied
 from xiaolv.domain.text_reply import TextPart, TextReply, validate_text_parts
 from xiaolv.domain.voice_reply import VoiceReply
+from xiaolv.domain.web import ToolUnavailable
 
 
 @dataclass(frozen=True)
@@ -31,6 +33,7 @@ class ConversationCandidate:
     context: ConversationContext = field(default_factory=lambda: ConversationContext(0, ()))
     profile_snapshot: ProfileSnapshot | None = None
     source_message_id: str | None = None
+    tool_results: tuple[dict[str, Any], ...] = ()
 
 
 class ConversationModel(Protocol):
@@ -73,12 +76,14 @@ class TextRuntime:
         voice_delivery: VoiceDelivery | None = None,
         inbound_speech: InboundSpeech | None = None,
         inbound_images: InboundImages | None = None,
+        web_tools: WebTools | None = None,
     ) -> None:
         self._locks: dict[str, asyncio.Lock] = {}
         self._model = model
         self._voice_delivery = voice_delivery
         self._inbound_speech = inbound_speech
         self._inbound_images = inbound_images
+        self._web_tools = web_tools
         self._profile_loader = profile_loader
         self._delivery = delivery
         self._clock = clock
@@ -172,6 +177,8 @@ class TextRuntime:
             return exc.reason
         except ContextOverflow:
             return "context_overflow"
+        except ToolUnavailable:
+            return "tool_error"
         except MediaUnavailable:
             return "media_error"
         except BudgetDenied:
@@ -223,6 +230,10 @@ class TextRuntime:
             await self._delivery.require_permission(state["candidate"].conversation_id)
             if self._clock() >= state["candidate"].expires_at:
                 raise TimeoutError()
+        if self._web_tools is not None:
+            state["candidate"] = await self._web_tools.enrich(
+                state["candidate"], self._delivery.require_permission
+            )
         reply = await self._model.reply(state["candidate"])
         if isinstance(reply, VoiceReply):
             return {"voice": reply}

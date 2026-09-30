@@ -14,13 +14,18 @@ from uuid import uuid4
 
 import httpx2 as httpx
 from openai import AsyncOpenAI, AsyncStream
-from openai.types.chat import ChatCompletionContentPartParam
+from openai.types.chat import (
+    ChatCompletionContentPartParam,
+    ChatCompletionMessageParam,
+    ChatCompletionToolUnionParam,
+)
 from opentelemetry import trace
 
 from xiaolv.domain.image import PreparedImage
 from xiaolv.domain.model_budget import ModelBudget, ModelCallIntent
 from xiaolv.domain.model_capacity import ModelCapacity
 from xiaolv.domain.model_usage import ModelCallReport, TokenUsage
+from xiaolv.domain.web import NativeToolCall, NativeToolTurn
 
 
 class ChatCompletionsGateway:
@@ -171,6 +176,92 @@ class ChatCompletionsGateway:
                     raise
                 finally:
                     if self._usage_sink is not None or self._budget is not None:
+                        await asyncio.shield(
+                            self._record(
+                                ModelCallReport(
+                                    call_id,
+                                    self._model,
+                                    started_at,
+                                    datetime.now(UTC),
+                                    status,
+                                    usage,
+                                )
+                            )
+                        )
+
+    async def choose_tools(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        expires_at: datetime,
+        before_request: Callable[[], Awaitable[None]],
+    ) -> NativeToolTurn:
+        remaining = (expires_at - datetime.now(UTC)).total_seconds()
+        if remaining <= 0:
+            raise TimeoutError("model deadline expired")
+        async with asyncio.timeout(remaining), self._slots:
+            call_id = uuid4().hex
+            permit = (
+                self._shared_capacity.hold(call_id, expires_at)
+                if self._shared_capacity is not None
+                else nullcontext()
+            )
+            async with permit:
+                await before_request()
+                started_at = datetime.now(UTC)
+                encoded = json.dumps(
+                    {"messages": messages, "tools": tools}, ensure_ascii=False
+                ).encode()
+                if self._budget is not None:
+                    await self._budget.reserve(
+                        ModelCallIntent(call_id, self._model, started_at, len(encoded) + 1024, 512)
+                    )
+                usage = None
+                status: Literal["completed", "failed", "cancelled"] = "failed"
+                try:
+                    async with asyncio.timeout(self._first_token_seconds):
+                        async with self._client.chat.completions.with_streaming_response.create(
+                            model=self._model,
+                            stream=False,
+                            max_completion_tokens=512,
+                            messages=cast(list[ChatCompletionMessageParam], messages),
+                            tools=cast(list[ChatCompletionToolUnionParam], tools),
+                            tool_choice="auto",
+                            parallel_tool_calls=False,
+                        ) as response:
+                            completion = await response.parse()
+                    if completion.usage is not None:
+                        usage = _parse_usage(completion.usage.model_dump())
+                    if len(completion.choices) != 1:
+                        raise ValueError("invalid tool completion")
+                    choice = completion.choices[0]
+                    if choice.message.refusal or choice.finish_reason not in {"stop", "tool_calls"}:
+                        raise ValueError("incomplete tool completion")
+                    calls = []
+                    for call in choice.message.tool_calls or []:
+                        if call.type != "function":
+                            raise ValueError("unsupported tool type")
+                        calls.append(
+                            NativeToolCall(call.id, call.function.name, call.function.arguments)
+                        )
+                    if (
+                        len(calls) > 4
+                        or len({call.id for call in calls}) != len(calls)
+                        or any(
+                            not call.id or len(call.id) > 128 or len(call.arguments) > 8192
+                            for call in calls
+                        )
+                        or bool(calls) != (choice.finish_reason == "tool_calls")
+                    ):
+                        raise ValueError("invalid tool completion")
+                    status = "completed"
+                    return NativeToolTurn(tuple(calls))
+                except asyncio.CancelledError:
+                    status = "cancelled"
+                    raise
+                finally:
+                    if self._budget is not None or self._usage_sink is not None:
                         await asyncio.shield(
                             self._record(
                                 ModelCallReport(
